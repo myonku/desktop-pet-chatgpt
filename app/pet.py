@@ -14,7 +14,7 @@ from movement import plan_movement, movement_fraction
 from platform_support import resource_root,state_root,configure_mac_window
 ROOT=resource_root()
 STATE_ROOT=state_root()
-ASSETS=ROOT/'outputs/白龙桌宠素材'
+ASSETS=ROOT/'assets/白龙桌宠素材'
 FLAGS=Qt.WindowType.FramelessWindowHint|Qt.WindowType.WindowStaysOnTopHint|Qt.WindowType.Tool
 
 def clamp_position(position,size,area):
@@ -810,11 +810,11 @@ class Pet(QWidget):
             from PySide6.QtMultimedia import QSoundEffect
             from PySide6.QtCore import QUrl
             if not hasattr(self,'click_sound'):
-                self.click_sound=QSoundEffect(self);self.click_sound.setSource(QUrl.fromLocalFile(str(ROOT/'app/sounds/click.wav')))
+                self.click_sound=QSoundEffect(self);self.click_sound.setSource(QUrl.fromLocalFile(str(ROOT/'assets/sounds/click.wav')))
             self.click_sound.play();return
         if sys.platform=='win32':
             import winsound
-            sound=ROOT/'app/sounds/click.wav'
+            sound=ROOT/'assets/sounds/click.wav'
             if sound.is_file():
                 try:winsound.PlaySound(str(sound),winsound.SND_FILENAME|winsound.SND_ASYNC|winsound.SND_NODEFAULT)
                 except RuntimeError:pass

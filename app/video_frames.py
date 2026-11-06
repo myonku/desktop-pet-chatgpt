@@ -5,7 +5,7 @@ from platform_support import resource_root
 
 def ffmpeg_path():
     root=resource_root()
-    for candidate in (root/'tools/ffmpeg.exe',root/'tools/ffmpeg',root/'work/video-deps/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe'):
+    for candidate in (root/'tools/ffmpeg.exe',root/'tools/ffmpeg',root/'scripts/video-deps/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe'):
         if candidate.is_file():return str(candidate)
     found=shutil.which('ffmpeg')
     if found:return found

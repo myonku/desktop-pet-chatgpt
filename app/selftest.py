@@ -42,7 +42,7 @@ def run(root):
             frames=pet.load(item);assert abs(len(frames)-round(item['durationMs']*item.get('fps',30 if item.get('number')=='03' and item.get('movementAngleRange') else 24)/1000))<=1
             assert frames[0].width()==pet.frame_size
         assert len(pet.variants)==15 and len(items)==24+len(pet.manifest.get('additionalIdleAnimations',[]))+len(pet.movement_slots);report['checks'].append(f'{len(items)}段动画可解码，含移动差分')
-        assert (root/'app/sounds/click.wav').is_file()
+        assert (root/'assets/sounds/click.wav').is_file()
         assert next(v for v in pet.variants if v['id']=='14') in items
         for item in items:
             assert 'renderScale' in item and 'renderOffset' in item
