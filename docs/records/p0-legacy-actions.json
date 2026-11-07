@@ -1,0 +1,413 @@
+{
+  "source_commit": "852f4f4",
+  "source_path": "assets/白龙桌宠素材/素材清单.json",
+  "groups": {
+    "idle": [
+      {
+        "id": "idle",
+        "durationMs": 4000,
+        "loop": true,
+        "renderScale": 1.0,
+        "renderOffset": [
+          0.0,
+          0.0
+        ],
+        "renderAnchor": "bottom-center"
+      }
+    ],
+    "additionalIdleAnimations": [
+      {
+        "id": "idle2",
+        "durationMs": 4000,
+        "loop": true,
+        "renderScale": 1.0049342105263157,
+        "renderOffset": [
+          0.0013923154239766373,
+          0.004523026315789499
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "idle03",
+        "durationMs": 6042,
+        "loop": false,
+        "renderScale": 1.0183333333333333,
+        "renderOffset": [
+          -1.2731481481509377e-05,
+          0.013951388888888916
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "idle04",
+        "durationMs": 6042,
+        "loop": false,
+        "renderScale": 1.0149501661129567,
+        "renderOffset": [
+          0.0013992709486895238,
+          0.01368355481727579
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "idle05",
+        "durationMs": 7042,
+        "loop": false,
+        "renderScale": 1.0149501661129567,
+        "renderOffset": [
+          0.0013992709486895238,
+          0.01368355481727579
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "idle06",
+        "durationMs": 7042,
+        "loop": false,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          0.001396937086092731,
+          0.010607523914643036
+        ],
+        "renderAnchor": "bottom-center"
+      }
+    ],
+    "variants": [
+      {
+        "id": "01",
+        "durationMs": 4000,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          0.00139693708609272,
+          0.01343359087564377
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "04",
+        "durationMs": 4000,
+        "renderScale": 1.0082508250825082,
+        "renderOffset": [
+          0.0027949669966996597,
+          0.007563256325632513
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "05",
+        "durationMs": 4000,
+        "renderScale": 0.9791666666666666,
+        "renderOffset": [
+          0.0034143518518518256,
+          -0.019097222222222224
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "08",
+        "durationMs": 4000,
+        "renderScale": 1.0183333333333333,
+        "renderOffset": [
+          -0.0007199074074073843,
+          0.011148148148148114
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "09",
+        "durationMs": 4000,
+        "renderScale": 1.0049342105263157,
+        "renderOffset": [
+          -3.426535087748385e-06,
+          0.010105994152046726
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "13",
+        "durationMs": 4000,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          0.00139693708609272,
+          0.010623620309050825
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "14",
+        "durationMs": 4000,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          0.00139693708609272,
+          0.010623620309050825
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "17",
+        "durationMs": 5042,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          -0.0014130334805003697,
+          0.010607523914643036
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "18",
+        "durationMs": 4000,
+        "renderScale": 1.0082508250825082,
+        "renderOffset": [
+          -5.729739640653659e-06,
+          0.010363953061972906
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "20",
+        "durationMs": 4000,
+        "renderScale": 1.0183333333333333,
+        "renderOffset": [
+          0.002815972222222185,
+          0.013951388888888916
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "21",
+        "durationMs": 4042,
+        "renderScale": 0.9760383386581469,
+        "renderOffset": [
+          0.002727857649982235,
+          -0.011086705715299905
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "22",
+        "durationMs": 4000,
+        "renderScale": 1.0082508250825082,
+        "renderOffset": [
+          -5.729739640653659e-06,
+          0.010363953061972906
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "24",
+        "durationMs": 6042,
+        "renderScale": 0.9823151125401929,
+        "renderOffset": [
+          -0.0068093515541264305,
+          -0.0025433190425151464
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "25",
+        "durationMs": 4000,
+        "renderScale": 1.001639344262295,
+        "renderOffset": [
+          -1.138433515516605e-06,
+          0.0015027322404370757
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "26",
+        "durationMs": 4042,
+        "renderScale": 1.0082508250825082,
+        "renderOffset": [
+          0.002794966996699677,
+          0.010352493582691524
+        ],
+        "renderAnchor": "bottom-center"
+      }
+    ],
+    "dragAnimation": [
+      {
+        "id": "drag",
+        "durationMs": 4000,
+        "renderScale": 1.0049342105263157,
+        "renderOffset": [
+          -0.003492781432748555,
+          0.007314510233918112
+        ],
+        "renderAnchor": "bottom-center"
+      }
+    ],
+    "landingAnimation": [
+      {
+        "id": "landing",
+        "durationMs": 2000,
+        "renderScale": 1.0049342105263157,
+        "renderOffset": [
+          -0.003492781432748555,
+          0.007314510233918112
+        ],
+        "renderAnchor": "bottom-center"
+      }
+    ],
+    "quotaAnimation": [
+      {
+        "id": "quota",
+        "durationMs": 4000,
+        "renderScale": 0.9622047244094488,
+        "renderOffset": [
+          2.624671916006744e-05,
+          0.0014370078740157054
+        ],
+        "renderAnchor": "bottom-center"
+      }
+    ],
+    "workAnimations": [
+      {
+        "id": "work01",
+        "durationMs": 4042,
+        "renderScale": 1.0082508250825082,
+        "renderOffset": [
+          -5.729739640636389e-06,
+          0.010352493582691524
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "work02",
+        "durationMs": 6042,
+        "renderScale": 1.0,
+        "renderOffset": [
+          0,
+          0
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "work03",
+        "durationMs": 5042,
+        "renderScale": 1.0183333333333333,
+        "renderOffset": [
+          -1.2731481481509377e-05,
+          0.013951388888888916
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "work04",
+        "durationMs": 5042,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          -0.0014130334805003697,
+          0.013417494481236303
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      {
+        "id": "work05",
+        "durationMs": 4042,
+        "renderScale": 1.0115894039735098,
+        "renderOffset": [
+          0.001396937086092731,
+          0.010607523914643036
+        ],
+        "renderAnchor": "bottom-center"
+      },
+      null
+    ],
+    "movementAnimations": [
+      {
+        "id": "move02",
+        "durationMs": 11000,
+        "number": "02",
+        "renderScale": 1.0149501661129567,
+        "renderOffset": [
+          0.0013992709486895238,
+          0.01086424880029524
+        ],
+        "renderAnchor": "bottom-center",
+        "sourceFacing": "right",
+        "moveStartMs": 4750,
+        "moveStopMs": 7500
+      },
+      {
+        "id": "move02left",
+        "durationMs": 9042,
+        "number": "02",
+        "renderScale": 0.9983660130718954,
+        "renderOffset": [
+          -0.009705201525054385,
+          0.009597403776325342
+        ],
+        "renderAnchor": "bottom-center",
+        "sourceFacing": "left",
+        "moveStartMs": 1917,
+        "moveStopMs": 5250
+      },
+      {
+        "id": "move01left",
+        "durationMs": 5042,
+        "number": "01",
+        "renderScale": 1.0149501661129567,
+        "renderOffset": [
+          -1.0382059800639887e-05,
+          0.01368355481727579
+        ],
+        "renderAnchor": "bottom-center",
+        "sourceFacing": "left",
+        "moveStartMs": 1000,
+        "moveStopMs": 3250
+      },
+      {
+        "id": "move01right",
+        "durationMs": 5042,
+        "number": "01",
+        "renderScale": 1.0149501661129567,
+        "renderOffset": [
+          0.0013992709486895238,
+          0.01368355481727579
+        ],
+        "renderAnchor": "bottom-center",
+        "sourceFacing": "right",
+        "moveStartMs": 750,
+        "moveStopMs": 3250
+      },
+      {
+        "id": "move03left",
+        "durationMs": 9100,
+        "number": "03",
+        "renderScale": 1.0183333333333333,
+        "renderOffset": [
+          -1.2731481481509377e-05,
+          0.013951388888888916
+        ],
+        "renderAnchor": "bottom-center",
+        "sourceFacing": "left",
+        "moveStartMs": 3125,
+        "moveStopMs": 7750,
+        "movementSpeed": 0.65,
+        "movementAngleRange": [
+          45,
+          80
+        ]
+      },
+      {
+        "id": "move03right",
+        "durationMs": 9100,
+        "number": "03",
+        "renderScale": 1.0183333333333333,
+        "renderOffset": [
+          0.0014016203703703378,
+          0.013951388888888916
+        ],
+        "renderAnchor": "bottom-center",
+        "sourceFacing": "right",
+        "moveStartMs": 3300,
+        "moveStopMs": 7750,
+        "movementSpeed": 0.65,
+        "movementAngleRange": [
+          45,
+          80
+        ]
+      }
+    ]
+  }
+}
