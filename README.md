@@ -1,30 +1,29 @@
-# GPT白龙娘动态桌宠 v0.5.1
+# GPT 白龙娘桌宠
 
-Windows轻量版：自移动、吸边探头、大小调节、Codex公开任务进展提醒，35段透明WebM动画。
+面向 Windows 的非官方桌宠项目。Rust 版处于工程初始化阶段，计划提供透明动画、自移动和桌面互动，并可选接入 Codex 的任务与会话功能。
 
-普通使用者请到[发布页](https://github.com/jingh12312-rgb/bailong-desktop-pet/releases/tag/v0.5.1)下载 `bailong-desktop-pet-v0.5.1-windows-x64-webm.zip`，全部解压后双击 `BailongPet.exe`。
+## 目录
 
-## 开发者运行
+| 路径 | 用途 |
+| --- | --- |
+| `src/` | Rust 程序入口 |
+| `docs/` | 设计、计划与阶段记录 |
+| `docs/archive/` | 历史文档与审计记录 |
 
-此仓库提供v0.5.1轻量版源码；动画与音效位于 `assets/`，Windows解码器位于 `tools/ffmpeg.exe`。原作者的补充文档与构建记录保留在 `docs/upstream/`，素材调查记录位于 `docs/audit-2026-11-06/`。
+## 依赖与配置
 
-1. 安装64位Python（当前构建使用Python 3.13）。
-2. 在源码目录执行 `python -m pip install -r requirements.txt`。
-3. 保留源码中的 `assets/白龙桌宠素材/`、`assets/sounds/` 和 `tools/ffmpeg.exe`，无需再从发布包复制资源。
-4. 执行 `python app/pet.py`；自检执行 `python app/pet.py --self-test`。
+当前骨架需要 Rust/Cargo 和 Windows MSVC 构建工具，使用 Cargo 默认配置与环境变量规则。在仓库根目录运行 `cargo run --locked` 可启动骨架程序。
 
-程序通过FFmpeg的libvpx-vp9解码透明通道，保留动作预加载；请不要用丢弃透明通道的默认VP9解码方式替换。
+计划使用 winit 管理窗口和输入，wgpu 绘制桌宠，Windows API 提供系统交互，egui 提供设置与聊天界面。
 
-## 构建Windows包
+## 文档
 
-在Windows上安装PyInstaller 6.22.3至 `.build-tools`：`python -m pip install --target .build-tools pyinstaller==6.22.3`。
+- [项目文档索引](docs/README.md)
+- [重构计划](docs/refactor-plan-2026-11-07.md)
+- [媒体与渲染评估](docs/media-rendering-decision-2026-11-07.md)
 
-运行 `python scripts/build_windows.py` 生成EXE。重新整理完整ZIP使用 `python scripts/build_release.py`，使用 `tools/ffmpeg.exe` 和 `assets/` 中的资源，输出到 `release/`。素材预处理入口为 `python scripts/prepare_assets.py`；测试已移至 `tests/`，在PowerShell中先执行 `$env:PYTHONPATH="app"`，再执行 `python -m unittest discover -s tests`。随包第三方许可保留在 `third_party/licenses/`。
+## 许可
 
-## 说明
+源码尚未指定开源许可证。第三方组件遵循各自许可证。
 
-没有Codex也能使用普通桌宠功能。额度、对话与任务同步需要使用者自己的Codex安装和登录。仓库不包含账号、密钥、个人聊天记录。
-
-macOS适配源码尚未完成Mac实机验收，不提供已验证Mac安装包。当前Mac构建脚本仍需补齐FFmpeg打包，请勿将其当作可直接发布的构建流程。
-
-源码尚未指定开源许可证；公开源码不代表授予任意使用或再分发许可。美术素材说明见ASSETS.md，运行库遵循各自许可证。本项目非OpenAI官方产品。
+本仓库是基于上游项目进行技术研究与改进的非官方 fork。本仓库尚未收到原作者（[bilibili @風-隐，UID 290239611](https://space.bilibili.com/290239611)）的明确授权。我们尊重原作者及相关权利人的权益，不将未回复视为授权，也不据此推断作者拒绝引用。角色、美术、动画、音效及其转换版本的权利范围尚待逐项确认；本仓库不因公开展示、技术修改或署名而额外授予这些资源的使用、修改、商用或再分发许可。上游代码的许可状态与第三方软件许可另行说明。如权利人对相关内容有疑问，我们愿意沟通核实，并据核实结果调整展示、分发或移除相关内容。本项目非 OpenAI 官方产品。
