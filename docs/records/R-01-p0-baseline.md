@@ -59,3 +59,7 @@
 ```
 
 提交前重新生成并核对 31 张 PNG 的 SHA-256，清单哈希与初次生成相同。采样脚本再次对当前 PowerShell 进程进行 1 秒冒烟，输出两条可解析的采样记录。原始 PNG、清单和旧测试日志留在本地 `target/`。
+
+## P0-04 · 托管验收
+
+2026-11-07，提交 `53d0ba629543ff76e6ddd8150d71753ff4b09949` 推送至 `main` 后，[Windows Rust checks #1](https://github.com/myonku/desktop-pet-chatgpt/actions/runs/42341652991) 成功，耗时 1 分 36 秒。P0-04 验收通过。

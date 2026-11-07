@@ -47,3 +47,7 @@
 本机通过干净 Debug/Release locked 构建、fmt、Clippy、类型探针及 Cargo 测试命令（0 项 Rust 测试）。旧版 83 项测试和离线自检通过，解码覆盖 35 段。合成 PNG 共 31 张，解码与哈希均已核对。
 
 下一步在托管 Windows CI 首次执行后完成 P0-04 验收，再进入 P1a-01 验证透明首帧与 alpha 合成。
+
+## 2026-11-07 · P0-04 托管验收完成
+
+`53d0ba6` 在 `main` 上触发的 Windows Rust checks #1 成功。P0 全部通过，P1a-01 从独立开发分支开始。见 [R-01](records/R-01-p0-baseline.md#p0-04--托管验收)。
