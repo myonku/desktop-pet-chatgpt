@@ -2,6 +2,8 @@
 
 面向 Windows 的非官方桌宠项目。Rust 版处于工程初始化阶段，计划提供透明动画、自移动和桌面互动，并可选接入 Codex 的任务与会话功能。
 
+本仓库从 **v0.1.0** 开始独立编号，对应源仓库 **v0.5.1** 的迁移重构起点。集成以桌面版 ChatGPT 为首个目标，后续计划支持桌面版 DeepSeek Harness（DSH）。
+
 ## 目录
 
 | 路径 | 用途 |
@@ -18,9 +20,9 @@
 
 ## 文档
 
-- [项目文档索引](docs/README.md)
-- [重构计划](docs/refactor-plan-2026-11-07.md)
-- [媒体与渲染评估](docs/media-rendering-decision-2026-11-07.md)
+- [项目文档索引](docs/G-01-README.md)
+- [重构计划](docs/G-02-refactor-plan-2026-11-07.md)
+- [媒体与渲染评估](docs/G-03-media-rendering-decision-2026-11-07.md)
 
 ## 许可
 
