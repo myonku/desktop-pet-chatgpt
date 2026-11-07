@@ -5,6 +5,8 @@ edition = "2024"
 rust-version = "1.99.1"
 
 [target.'cfg(windows)'.dependencies]
+png = "=0.18.1"
+pollster = "=0.4.0"
 winit = { version = "=0.30.12", default-features = false, features = ["rwh_06"] }
 wgpu = { version = "=27.0.1", default-features = false, features = ["std", "dx12", "wgsl"] }
 egui = { version = "=0.33.3", features = ["default_fonts"] }
