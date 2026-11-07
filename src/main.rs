@@ -1,7 +1,11 @@
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
+mod platform;
+#[cfg(windows)]
 mod render;
+#[cfg(windows)]
+mod sample;
 
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]

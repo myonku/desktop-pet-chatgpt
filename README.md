@@ -1,6 +1,6 @@
 # GPT 白龙娘桌宠
 
-面向 Windows 的非官方桌宠项目，正在从旧版 Python/Qt 工程迁移到 Rust。**当前可运行 P1a-01 透明窗口原型**，显示自有静态 PNG。
+面向 Windows 的非官方桌宠项目，正在从旧版 Python/Qt 工程迁移到 Rust。**当前可运行 P1a 窗口输入原型**，显示自有静态 PNG。
 
 本仓库从 **v0.1.0** 独立编号，对应源仓库 **v0.5.1** 的迁移重构起点。首发目标为 Windows x64，Windows 11 优先验证；其他系统尚不承诺支持。
 
@@ -18,9 +18,9 @@
 cargo run --locked
 ```
 
-启动后可看到置顶的透明色阶样本。可以从任务栏关闭窗口，或选中窗口后按 Alt+F4。程序内置合成样本，直接运行即可。P0 工具链与托管 Windows CI 见 [R-01](docs/records/R-01-p0-baseline.md)，透明首帧及实机结果见 [R-02](docs/records/R-02-p1a-first-frame.md)。
+启动后可看到置顶的透明色阶样本。按住可见区域拖动窗口，右键打开菜单。开启全窗口鼠标穿透后，可从系统托盘中的 Desktop Pet ChatGPT 图标撤销穿透或退出。程序内置合成样本，直接运行即可。P0 工具链与托管 Windows CI 见 [R-01](docs/records/R-01-p0-baseline.md)，实机结果见 [透明首帧](docs/records/R-02-p1a-first-frame.md)和[窗口输入](docs/records/R-03-p1a-window-input.md)。
 
-更新：2026-11-07。P1a-01 透明首帧通过参考机视觉验收，下一节点为 P1a-02 窗口输入。
+更新：2026-11-07。P1a-02 窗口输入已实现，混合 DPI 跨屏与托盘实点待验收。
 
 ## 文档索引与阅读顺序
 

@@ -59,3 +59,7 @@
 ## 2026-11-07 · P1a-01 透明首帧验收完成
 
 winit、wgpu DX12 和 DirectComposition 呈现自有 PNG。参考机在黑、白、蓝背景上通过透明与边缘视觉验收，本地格式、Clippy、Debug/Release 构建和 Cargo 测试命令通过。实现与 [R-02](records/R-02-p1a-first-frame.md) 同一提交，下一节点为 P1a-02。
+
+## 2026-11-07 · P1a-02 窗口输入检查点
+
+交付基于 alpha 的跨进程命中、系统阈值拖拽、原生托盘菜单和全窗口穿透恢复。单屏 175% 下，透明区及全窗口穿透均实测落到下层进程，托盘注册和回调路径可恢复拖拽并退出。通过本地格式、Clippy、锁定 Debug/Release 构建和命中比例回归测试。混合 DPI 跨屏、Explorer 托盘实点和拖拽期间焦点仍待实机补测。见 [R-03](records/R-03-p1a-window-input.md)。

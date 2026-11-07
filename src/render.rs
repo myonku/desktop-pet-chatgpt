@@ -1,8 +1,9 @@
-use std::{error::Error, io::Cursor, sync::Arc};
+use std::{error::Error, sync::Arc};
 
 use winit::window::Window;
 
-const SAMPLE: &[u8] = include_bytes!("render/alpha-color.png");
+use crate::sample::Sample;
+
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const ALPHA: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PreMultiplied;
 
@@ -17,7 +18,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(window: Arc<Window>, sample: &Sample) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let mut descriptor = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::DX12,
@@ -75,7 +76,7 @@ impl Renderer {
             multiview: None,
             cache: None,
         });
-        let view = upload_sample(&device, &queue)?;
+        let view = upload_sample(&device, &queue, sample);
         let sprite = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("P0 alpha-color PNG"),
             layout: &pipeline.get_bind_group_layout(0),
@@ -135,24 +136,10 @@ impl Renderer {
     }
 }
 
-fn upload_sample(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> Result<wgpu::TextureView, Box<dyn Error>> {
-    let mut reader = png::Decoder::new(Cursor::new(SAMPLE)).read_info()?;
-    let mut rgba = vec![
-        0;
-        reader
-            .output_buffer_size()
-            .ok_or("PNG output size overflow")?
-    ];
-    let info = reader.next_frame(&mut rgba)?;
-    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-        return Err("the prototype sample must be an RGBA8 PNG".into());
-    }
+fn upload_sample(device: &wgpu::Device, queue: &wgpu::Queue, sample: &Sample) -> wgpu::TextureView {
     let size = wgpu::Extent3d {
-        width: info.width,
-        height: info.height,
+        width: sample.width,
+        height: sample.height,
         depth_or_array_layers: 1,
     };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -167,13 +154,13 @@ fn upload_sample(
     });
     queue.write_texture(
         texture.as_image_copy(),
-        &rgba[..info.buffer_size()],
+        &sample.rgba,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(info.width * 4),
+            bytes_per_row: Some(sample.width * 4),
             rows_per_image: None,
         },
         size,
     );
-    Ok(texture.create_view(&Default::default()))
+    texture.create_view(&Default::default())
 }
