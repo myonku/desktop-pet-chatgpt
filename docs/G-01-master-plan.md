@@ -10,7 +10,7 @@
 
 ## 2. 工程事实与范围
 
-P0 工具链与托管 Windows CI 已通过。当前 Rust 原型已实现透明 PNG 首帧、alpha 命中、拖拽、托盘及穿透恢复，素材仍是编入程序的自有 PNG 样本。egui 中文预览与恢复已通过 P1a 原型验收，媒体包加载、完整桌宠行为及客户端连接待实施。旧工程可从提交 `852f4f4` 追溯，本地忽略目录 `.legacy-v0.5.1/` 用于查阅。进度及实机证据见 [G-04](G-04-delivery-plan.md)。
+P0 工具链与托管 Windows CI 已通过。P1a 透明窗口、alpha 命中、拖拽、托盘和中文预览已完成原型验收。P1b 已接入版本化素材包及 PNG、RGBA8、BC7 有界播放，内置 PNG 用作启动与故障占位。P1b-03 决定媒体格式与预算。完整桌宠行为、物理尺寸探测和偏好迁移归 P2，客户端接入归 P3。旧工程可从提交 `852f4f4` 追溯，本地忽略目录 `.legacy-v0.5.1/` 用于查阅。进度及实机证据见 [G-04](G-04-delivery-plan.md)。
 
 首发 Windows x64，Windows 11 优先验收；Windows 10 待依赖与设备验证。单角色、单桌宠实例、本地使用、可离线运行基础桌宠功能。桌面版 ChatGPT 为首个产品集成目标，既有 Codex 会话和任务机制为待验证的技术接入线索，二者不等同于已验证的统一接口。DeepSeek Harness（DSH）后续独立排期。
 
@@ -27,7 +27,7 @@ P0 工具链与托管 Windows CI 已通过。当前 Rust 原型已实现透明 P
 
 已定：Rust stable/MSVC、winit、wgpu/WGSL、Windows 平台封装、egui 辅助 UI；标准线程和有界消息；默认用户包不依赖 Python/Qt，目标不需要运行时 FFmpeg。单 Cargo 包起步，按模块分工，出现独立发布需求后再拆 workspace。
 
-已验证的透明窗口原型采用 P0 锁定的依赖组合和 D3D12/DirectComposition。媒体默认格式、分页封装、兼容媒体路径、资源包分发方式和性能预算待 P1b 实测。BC7 为优先实验，PNG/RGBA 为正确性基准，不能把实验候选写成既定默认。技术原理与既有资料见 [G-07](G-07-media-rendering-decision-2026-11-07.md)，后续实验按锁定版本复核所用 API。
+透明窗口采用 D3D12/DirectComposition，锁定依赖由当前 Cargo.lock 记录。P1b-02 的 PNG 启动缺省值用于原型，BC7 兼容路径已实现。发布默认格式、分页封装、资源包分发与性能预算由 P1b-03 实测后冻结。技术原理与既有资料见 [G-07](G-07-media-rendering-decision-2026-11-07.md)。
 
 追加设计在 P1b 预留整套素材包替换契约，在 P3 沿用集成适配器契约并拆分客户端专属展示资源。首次启动优先评估基于显示器物理尺寸的默认大小，探测不可行时沿用 256 DIP。具体行为与实现边界见 [G-02](G-02-feature-spec.md) 和 [G-03](G-03-architecture.md)。
 

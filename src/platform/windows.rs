@@ -27,20 +27,12 @@ use winit::{
     window::Window,
 };
 
-use crate::{playback::PageResult, sample::FrameView};
+use crate::{app::AppEvent, sample::FrameView};
 
 const TRAY_MESSAGE: u32 = WM_APP + 1;
 const TRAY_ID: u32 = 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const SUBCLASS_ID: usize = 1;
-
-pub enum InputEvent {
-    TrayMenu(PhysicalPosition<i32>),
-    TaskbarCreated,
-    ResumeDisplay,
-    PetDeviceLost,
-    PageReady(PageResult),
-}
 
 pub enum Command {
     TogglePassthrough,
@@ -50,7 +42,7 @@ pub enum Command {
 }
 
 struct Callback {
-    proxy: EventLoopProxy<InputEvent>,
+    proxy: EventLoopProxy<AppEvent>,
     taskbar_created: u32,
     drag: Cell<Option<Drag>>,
 }
@@ -63,7 +55,7 @@ pub struct WindowInput {
 }
 
 impl WindowInput {
-    pub fn new(window: &Window, proxy: EventLoopProxy<InputEvent>) -> Result<Self, String> {
+    pub fn new(window: &Window, proxy: EventLoopProxy<AppEvent>) -> Result<Self, String> {
         let handle = window.window_handle().map_err(|error| error.to_string())?;
         let RawWindowHandle::Win32(handle) = handle.as_raw() else {
             return Err("expected a Win32 window".into());
@@ -415,7 +407,7 @@ unsafe extern "system" fn window_proc(
     }
     match message {
         WM_POWERBROADCAST if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize => {
-            let _ = callback.proxy.send_event(InputEvent::ResumeDisplay);
+            let _ = callback.proxy.send_event(AppEvent::ResumeDisplay);
         }
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => callback.drag.set(Drag::start(hwnd, lparam)),
         WM_MOUSEMOVE if wparam.0 & MK_LBUTTON.0 as usize != 0 => {
@@ -432,14 +424,12 @@ unsafe extern "system" fn window_proc(
         let notification = lparam.0 as u16 as u32;
         if matches!(notification, WM_CONTEXTMENU | NIN_SELECT | NIN_KEYSELECT) {
             let point = message_point(wparam.0);
-            Some(InputEvent::TrayMenu(PhysicalPosition::new(
-                point.x, point.y,
-            )))
+            Some(AppEvent::TrayMenu(PhysicalPosition::new(point.x, point.y)))
         } else {
             None
         }
     } else if message == callback.taskbar_created && message != 0 {
-        Some(InputEvent::TaskbarCreated)
+        Some(AppEvent::TaskbarCreated)
     } else {
         None
     };

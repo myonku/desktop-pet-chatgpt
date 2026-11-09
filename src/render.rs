@@ -2,7 +2,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use winit::{event_loop::EventLoopProxy, window::Window};
 
-use crate::{platform::windows::InputEvent, sample::FrameView};
+use crate::{app::AppEvent, sample::FrameView};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const ALPHA: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PreMultiplied;
@@ -30,7 +30,7 @@ impl Renderer {
         window: Arc<Window>,
         frame: FrameView<'_>,
         enable_bc7: bool,
-        proxy: EventLoopProxy<InputEvent>,
+        proxy: EventLoopProxy<AppEvent>,
     ) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let mut descriptor = wgpu::InstanceDescriptor {
@@ -69,7 +69,7 @@ impl Renderer {
         device.set_device_lost_callback(move |reason, message| {
             if reason == wgpu::DeviceLostReason::Unknown {
                 eprintln!("Pet device lost: {message}");
-                let _ = proxy.send_event(InputEvent::PetDeviceLost);
+                let _ = proxy.send_event(AppEvent::PetDeviceLost);
             }
         });
         let mut config = surface
@@ -85,7 +85,7 @@ impl Renderer {
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("render/first_frame.wgsl"));
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("P1a first frame"),
+            label: Some("Pet frame"),
             layout: None,
             vertex: wgpu::VertexState {
                 module: &shader,

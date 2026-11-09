@@ -1,4 +1,4 @@
-use std::{error::Error, path::Path, sync::Arc, time::Instant};
+use std::{error::Error, io, path::PathBuf, sync::Arc, thread, time::Instant};
 
 use desktop_pet_chatgpt::media::Variant;
 use winit::{
@@ -11,17 +11,26 @@ use winit::{
 };
 
 use crate::{
-    platform::windows::{Command, InputEvent, WindowInput},
-    playback::Playback,
+    platform::windows::{Command, WindowInput},
+    playback::{PageResult, Playback},
     render::Renderer,
     sample::Sample,
     ui::Preview,
 };
 
+pub(crate) enum AppEvent {
+    TrayMenu(PhysicalPosition<i32>),
+    TaskbarCreated,
+    ResumeDisplay,
+    PetDeviceLost,
+    PackReady(io::Result<Box<Playback>>),
+    PageReady(PageResult),
+}
+
 struct App {
     scene: Option<Scene>,
     preview: Option<Preview>,
-    proxy: EventLoopProxy<InputEvent>,
+    proxy: EventLoopProxy<AppEvent>,
     error: Option<Box<dyn Error>>,
 }
 
@@ -36,10 +45,11 @@ struct Scene {
     visible: bool,
     surface_retried: bool,
     device_rebuilt: bool,
+    first_asset_presented: bool,
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
-    let event_loop = EventLoop::<InputEvent>::with_user_event().build()?;
+    let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let mut app = App {
         scene: None,
         preview: None,
@@ -56,7 +66,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 impl Scene {
     fn open(
         event_loop: &ActiveEventLoop,
-        proxy: EventLoopProxy<InputEvent>,
+        proxy: EventLoopProxy<AppEvent>,
     ) -> Result<Self, Box<dyn Error>> {
         let window = Arc::new(
             event_loop.create_window(
@@ -89,41 +99,43 @@ impl Scene {
                 Variant::Png
             }
         };
-        let mut playback =
-            std::env::var_os("DESKTOP_PET_PACK").and_then(|root| {
-                match Playback::open(Path::new(&root), variant, proxy.clone()) {
-                    Ok(playback) => Some(playback),
-                    Err(error) => {
-                        eprintln!("Could not open asset pack; using placeholder: {error}");
-                        None
-                    }
-                }
-            });
-        let wants_bc7 = playback.is_some() && variant == Variant::Bc7;
+        let root = std::env::var_os("DESKTOP_PET_PACK").map(PathBuf::from);
+        let wants_bc7 = root.is_some() && variant == Variant::Bc7;
         let renderer = pollster::block_on(Renderer::new(
             Arc::clone(&window),
             sample.view(),
             wants_bc7,
-            proxy,
+            proxy.clone(),
         ))?;
-        if !renderer.supports_bc7()
-            && let Some(playback) = &mut playback
-        {
-            playback.use_compatible_format();
-        }
         window.set_visible(true);
         window.request_redraw();
+        if let Some(root) = root {
+            let spawn = thread::Builder::new()
+                .name("asset-pack".into())
+                .spawn(move || {
+                    let frames = proxy.clone();
+                    let pack = Playback::open(&root, variant, move |page| {
+                        frames.send_event(AppEvent::PageReady(page)).is_ok()
+                    })
+                    .map(Box::new);
+                    let _ = proxy.send_event(AppEvent::PackReady(pack));
+                });
+            if let Err(error) = spawn {
+                eprintln!("Could not open asset pack; using placeholder: {error}");
+            }
+        }
         Ok(Self {
             input,
             renderer: Some(renderer),
             window,
             sample,
-            playback,
+            playback: None,
             wants_bc7,
             passthrough: false,
             visible: true,
             surface_retried: false,
             device_rebuilt: false,
+            first_asset_presented: false,
         })
     }
 
@@ -216,15 +228,29 @@ impl Scene {
     }
 
     fn redraw(&mut self) -> Result<(), wgpu::SurfaceError> {
-        if !self.visible {
+        if !self.visible || self.window.is_minimized() == Some(true) {
             return Ok(());
         }
         let Some(renderer) = &mut self.renderer else {
             return Ok(());
         };
         let size = self.window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return Ok(());
+        }
         match renderer.draw(size.width, size.height) {
-            Ok(()) => self.surface_retried = false,
+            Ok(()) => {
+                self.surface_retried = false;
+                if !self.first_asset_presented
+                    && self.playback.as_ref().and_then(Playback::frame).is_some()
+                {
+                    self.first_asset_presented = true;
+                    eprintln!(
+                        "First asset frame presented: {}x{}",
+                        size.width, size.height
+                    );
+                }
+            }
             Err(
                 wgpu::SurfaceError::Lost
                 | wgpu::SurfaceError::Outdated
@@ -256,7 +282,7 @@ impl App {
     }
 }
 
-impl ApplicationHandler<InputEvent> for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.scene.is_none() {
             match Scene::open(event_loop, self.proxy.clone()) {
@@ -269,24 +295,24 @@ impl ApplicationHandler<InputEvent> for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: InputEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
         let Some(scene) = &mut self.scene else {
             return;
         };
         match event {
-            InputEvent::TrayMenu(position) => {
+            AppEvent::TrayMenu(position) => {
                 if scene.menu(event_loop, Some(position)) {
                     self.open_preview(event_loop);
                 }
             }
-            InputEvent::TaskbarCreated => {
+            AppEvent::TaskbarCreated => {
                 scene.input.add_tray();
                 if !scene.input.has_tray() {
                     scene.set_passthrough(false);
                     scene.set_visible(true);
                 }
             }
-            InputEvent::ResumeDisplay => {
+            AppEvent::ResumeDisplay => {
                 scene.surface_retried = false;
                 if let Some(playback) = &mut scene.playback {
                     playback.pause();
@@ -298,12 +324,29 @@ impl ApplicationHandler<InputEvent> for App {
                     preview.window.request_redraw();
                 }
             }
-            InputEvent::PageReady(result) => {
-                if let Some(playback) = &mut scene.playback {
-                    playback.accept(result);
+            AppEvent::PageReady(result) => {
+                if let Some(playback) = &mut scene.playback
+                    && let Err(error) = playback.accept(result)
+                    && let Err(error) = scene.fallback(error)
+                {
+                    self.error = Some(error.into());
+                    event_loop.exit();
                 }
             }
-            InputEvent::PetDeviceLost => {
+            AppEvent::PackReady(result) => match result {
+                Ok(mut playback) => {
+                    if scene
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|renderer| !renderer.supports_bc7())
+                    {
+                        playback.use_compatible_format();
+                    }
+                    scene.playback = Some(*playback);
+                }
+                Err(error) => eprintln!("Could not open asset pack; using placeholder: {error}"),
+            },
+            AppEvent::PetDeviceLost => {
                 if scene.device_rebuilt {
                     self.error = Some("Pet GPU device was lost again after recovery".into());
                     event_loop.exit();
@@ -314,7 +357,7 @@ impl ApplicationHandler<InputEvent> for App {
                 match pollster::block_on(Renderer::new(
                     scene.window.clone(),
                     scene.sample.view(),
-                    scene.wants_bc7 && scene.playback.is_some(),
+                    scene.wants_bc7,
                     self.proxy.clone(),
                 )) {
                     Ok(renderer) => {

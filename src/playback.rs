@@ -10,10 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::sample::FrameView;
 use desktop_pet_chatgpt::media::{Pack, PagePixels, Variant};
-use winit::event_loop::EventLoopProxy;
-
-use crate::{platform::windows::InputEvent, sample::FrameView};
 
 pub struct PageResult {
     generation: u64,
@@ -34,7 +32,10 @@ struct FrameSource {
 }
 
 impl FrameSource {
-    fn new(pack: Arc<Pack>, proxy: EventLoopProxy<InputEvent>) -> io::Result<Self> {
+    fn new(
+        pack: Arc<Pack>,
+        deliver: impl Fn(PageResult) -> bool + Send + 'static,
+    ) -> io::Result<Self> {
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
@@ -50,7 +51,7 @@ impl FrameSource {
                         index: request.index,
                         pixels,
                     };
-                    if proxy.send_event(InputEvent::PageReady(result)).is_err() {
+                    if !deliver(result) {
                         break;
                     }
                 }
@@ -121,7 +122,7 @@ pub struct Playback {
     variant: Variant,
     epoch: Option<Instant>,
     displayed: Option<(usize, PagePixels)>,
-    ready: Option<(usize, io::Result<PagePixels>)>,
+    ready: Option<(usize, PagePixels)>,
     selected: Option<usize>,
     pack_id: String,
 }
@@ -130,7 +131,7 @@ impl Playback {
     pub fn open(
         path: &Path,
         variant: Variant,
-        proxy: EventLoopProxy<InputEvent>,
+        deliver: impl Fn(PageResult) -> bool + Send + 'static,
     ) -> io::Result<Self> {
         let pack = Arc::new(Pack::open(path)?);
         let manifest = pack.manifest();
@@ -160,7 +161,7 @@ impl Playback {
         };
         let pack_id = manifest.pack_id.clone();
         Ok(Self {
-            source: FrameSource::new(pack, proxy)?,
+            source: FrameSource::new(pack, deliver)?,
             timeline,
             frames,
             variant,
@@ -192,10 +193,11 @@ impl Playback {
         self.selected = None;
     }
 
-    pub fn accept(&mut self, result: PageResult) {
-        if let Some(ready) = self.source.accept(result) {
-            self.ready = Some(ready);
+    pub fn accept(&mut self, result: PageResult) -> io::Result<()> {
+        if let Some((index, pixels)) = self.source.accept(result) {
+            self.ready = Some((index, pixels?));
         }
+        Ok(())
     }
 
     pub fn frame(&self) -> Option<(usize, FrameView<'_>)> {
@@ -224,8 +226,7 @@ impl Playback {
             .is_none_or(|(index, _)| *index != page)
         {
             if self.ready.as_ref().is_some_and(|(index, _)| *index == page) {
-                let (_, pixels) = self.ready.take().unwrap();
-                self.displayed = Some((page, pixels?));
+                self.displayed = self.ready.take();
                 changed = true;
             } else {
                 self.ready = None;
