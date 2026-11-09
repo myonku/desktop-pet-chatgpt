@@ -24,6 +24,8 @@ cargo run --locked
 
 在右键菜单选择「中文输入预览」打开独立窗口。托盘菜单可隐藏或恢复桌宠。P1a-03 的实现与验收进度见 [R-04](docs/records/R-04-p1a-ui-recovery.md)。
 
+P1b 播放实验可在启动前设置 `DESKTOP_PET_PACK` 为本地素材包目录，`DESKTOP_PET_FORMAT` 为 `png`、`rgba8` 或 `bc7`。退出后更改配置即可换包。生成样本和运行命令见 [R-06](docs/records/R-06-p1b-bounded-playback.md)。
+
 ## 文档索引与阅读顺序
 
 | 文档 | 唯一维护的内容 |

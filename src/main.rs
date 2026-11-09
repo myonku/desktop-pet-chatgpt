@@ -3,6 +3,8 @@ mod app;
 #[cfg(windows)]
 mod platform;
 #[cfg(windows)]
+mod playback;
+#[cfg(windows)]
 mod render;
 #[cfg(windows)]
 mod sample;

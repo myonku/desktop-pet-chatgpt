@@ -27,7 +27,7 @@ use winit::{
     window::Window,
 };
 
-use crate::sample::Sample;
+use crate::{playback::PageResult, sample::FrameView};
 
 const TRAY_MESSAGE: u32 = WM_APP + 1;
 const TRAY_ID: u32 = 1;
@@ -39,6 +39,7 @@ pub enum InputEvent {
     TaskbarCreated,
     ResumeDisplay,
     PetDeviceLost,
+    PageReady(PageResult),
 }
 
 pub enum Command {
@@ -200,7 +201,11 @@ impl WindowInput {
         }
     }
 
-    pub fn apply_hit_region(&mut self, sample: &Sample) -> Result<(), String> {
+    pub fn invalidate_hit_region(&mut self) {
+        self.hit_bounds = None;
+    }
+
+    pub fn apply_hit_region(&mut self, frame: FrameView<'_>) -> Result<(), String> {
         // The region clips only fully transparent pixels. Coordinates are relative to
         // the HWND, so account for any client offset even on a borderless window.
         unsafe {
@@ -222,13 +227,13 @@ impl WindowInput {
                 return Ok(());
             }
             let region = Region::rect(0, 0, 0, 0)?;
-            for (y, row) in sample
-                .rgba
-                .chunks_exact(sample.width as usize * 4)
-                .enumerate()
-            {
-                let top = scaled_edge(y as u32, sample.height, client.bottom) + offset_y;
-                let bottom = scaled_edge(y as u32 + 1, sample.height, client.bottom) + offset_y;
+            let [_, _, width, height] = frame.rect;
+            for (y, row) in frame.rows().enumerate() {
+                let top = scaled_edge(y as u32, height, client.bottom) + offset_y;
+                let bottom = scaled_edge(y as u32 + 1, height, client.bottom) + offset_y;
+                if top == bottom {
+                    continue;
+                }
                 let mut start = None;
                 let alpha = row
                     .as_chunks::<4>()
@@ -240,8 +245,11 @@ impl WindowInput {
                     if alpha != 0 {
                         start.get_or_insert(x as u32);
                     } else if let Some(first) = start.take() {
-                        let left = scaled_edge(first, sample.width, client.right) + offset_x;
-                        let right = scaled_edge(x as u32, sample.width, client.right) + offset_x;
+                        let left = scaled_edge(first, width, client.right) + offset_x;
+                        let right = scaled_edge(x as u32, width, client.right) + offset_x;
+                        if left == right {
+                            continue;
+                        }
                         let run = Region::rect(left, top, right, bottom)?;
                         if CombineRgn(region.0, region.0, run.0, RGN_OR) == RGN_ERROR {
                             return Err("could not combine alpha hit regions".into());

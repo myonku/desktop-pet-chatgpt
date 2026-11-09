@@ -12,6 +12,21 @@ const MANIFEST_LIMIT: usize = 1024 * 1024;
 const PAGE_LIMIT: usize = 32 * 1024 * 1024;
 const AUX_LIMIT: usize = 1024 * 1024;
 const MAX_SIDE: u32 = 4096;
+const PLAYBACK_PAGE_LIMIT: usize = 6 * 1024 * 1024;
+const PNG_STAGING_LIMIT: usize = 3 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Variant {
+    Png,
+    Rgba8,
+    Bc7,
+}
+
+pub struct PagePixels {
+    pub size: [u32; 2],
+    pub rgba: Vec<u8>,
+    pub bc7: Option<Vec<u8>>,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -235,39 +250,82 @@ impl Pack {
         Ok(bytes)
     }
 
+    pub fn load_page(
+        &self,
+        index: usize,
+        variant: Variant,
+        cancelled: impl Fn() -> bool,
+    ) -> io::Result<PagePixels> {
+        let page = self
+            .manifest
+            .pages
+            .get(index)
+            .ok_or_else(|| invalid("unknown page"))?;
+        let [width, height] = page.size;
+        let bytes = width as usize * height as usize * 4;
+        let bc7 = match variant {
+            Variant::Bc7 => page.bc7.as_ref(),
+            _ => None,
+        };
+        let extra = bc7.map_or(0, |_| bytes / 4);
+        if bytes + extra > PLAYBACK_PAGE_LIMIT {
+            return Err(invalid("page exceeds playback staging budget"));
+        }
+        let check_cancel = || {
+            if cancelled() {
+                Err(io::Error::new(io::ErrorKind::Interrupted, "page cancelled"))
+            } else {
+                Ok(())
+            }
+        };
+        check_cancel()?;
+        let (rgba, bc7) = if let Some(payload) = bc7 {
+            let data = self.read(payload, extra)?;
+            check_bc7(&data, extra)?;
+            check_cancel()?;
+            let mut rgba = vec![0; bytes];
+            let stride = width as usize * 4;
+            let blocks_per_row = width as usize / 4;
+            for (y, block_row) in data.chunks_exact(blocks_per_row * 16).enumerate() {
+                check_cancel()?;
+                for (x, block) in block_row.as_chunks::<16>().0.iter().enumerate() {
+                    let offset = y * 4 * stride + x * 16;
+                    bcdec_rs::bc7(block, &mut rgba[offset..], stride);
+                }
+            }
+            (rgba, Some(data))
+        } else if variant == Variant::Png {
+            let png = self.read(&page.png, PNG_STAGING_LIMIT)?;
+            check_cancel()?;
+            (decode_png(png, page.size, PNG_STAGING_LIMIT)?, None)
+        } else {
+            let rgba = self.read(&page.rgba8, bytes)?;
+            if rgba.len() != bytes {
+                return Err(invalid("invalid RGBA8 page length"));
+            }
+            (rgba, None)
+        };
+        check_cancel()?;
+        Ok(PagePixels {
+            size: page.size,
+            rgba,
+            bc7,
+        })
+    }
+
     pub fn validate_payloads(&self) -> io::Result<()> {
         for page in &self.manifest.pages {
             let [w, h] = page.size;
             let rgba_bytes = w as usize * h as usize * 4;
             let png = self.read(&page.png, PAGE_LIMIT)?;
-            let mut reader = png::Decoder::new(Cursor::new(png))
-                .read_info()
-                .map_err(io::Error::other)?;
-            let info = reader.info();
-            if [info.width, info.height] != page.size
-                || info.color_type != png::ColorType::Rgba
-                || info.bit_depth != png::BitDepth::Eight
-                || info.animation_control.is_some()
-            {
-                return Err(invalid(
-                    "expected a static RGBA8 PNG matching the page size",
-                ));
-            }
-            let mut decoded = vec![0; rgba_bytes];
-            reader.next_frame(&mut decoded).map_err(io::Error::other)?;
-            reader.finish().map_err(io::Error::other)?;
-            drop(reader);
+            let decoded = decode_png(png, page.size, PAGE_LIMIT)?;
             if self.read(&page.rgba8, rgba_bytes)? != decoded {
                 return Err(invalid("PNG and raw RGBA8 payloads differ"));
             }
             if let Some(bc7) = &page.bc7 {
                 let expected = rgba_bytes / 4;
                 let data = self.read(bc7, expected)?;
-                if data.len() != expected
-                    || data.as_chunks::<16>().0.iter().any(|block| block[0] == 0)
-                {
-                    return Err(invalid("invalid BC7 block count or mode"));
-                }
+                check_bc7(&data, expected)?;
             }
         }
         for resource in &self.manifest.resources {
@@ -286,6 +344,33 @@ impl Pack {
         }
         Ok(())
     }
+}
+
+fn decode_png(data: Vec<u8>, size: [u32; 2], limit: usize) -> io::Result<Vec<u8>> {
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    decoder.set_limits(png::Limits { bytes: limit });
+    let mut reader = decoder.read_info().map_err(io::Error::other)?;
+    let info = reader.info();
+    if [info.width, info.height] != size
+        || info.color_type != png::ColorType::Rgba
+        || info.bit_depth != png::BitDepth::Eight
+        || info.animation_control.is_some()
+    {
+        return Err(invalid(
+            "expected a static RGBA8 PNG matching the page size",
+        ));
+    }
+    let mut decoded = vec![0; size[0] as usize * size[1] as usize * 4];
+    reader.next_frame(&mut decoded).map_err(io::Error::other)?;
+    reader.finish().map_err(io::Error::other)?;
+    Ok(decoded)
+}
+
+fn check_bc7(data: &[u8], expected: usize) -> io::Result<()> {
+    if data.len() != expected || data.as_chunks::<16>().0.iter().any(|block| block[0] == 0) {
+        return Err(invalid("invalid BC7 block count or mode"));
+    }
+    Ok(())
 }
 
 fn valid_pcm_wave(bytes: &[u8]) -> bool {
@@ -345,15 +430,18 @@ fn contained_path(root: &Path, relative: &str) -> io::Result<PathBuf> {
 }
 
 fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    File::open(path)?
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > limit {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    if size > limit as u64 {
         return Err(invalid(format!(
             "payload exceeds limit: {}",
             path.display()
         )));
+    }
+    let mut bytes = vec![0; size as usize];
+    file.read_exact(&mut bytes)?;
+    if file.read(&mut [0])? != 0 {
+        return Err(invalid("payload grew during read"));
     }
     Ok(bytes)
 }

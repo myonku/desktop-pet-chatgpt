@@ -1,5 +1,6 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, path::Path, sync::Arc, time::Instant};
 
+use desktop_pet_chatgpt::media::Variant;
 use winit::{
     application::ApplicationHandler,
     dpi::{LogicalSize, PhysicalPosition},
@@ -11,6 +12,7 @@ use winit::{
 
 use crate::{
     platform::windows::{Command, InputEvent, WindowInput},
+    playback::Playback,
     render::Renderer,
     sample::Sample,
     ui::Preview,
@@ -28,6 +30,8 @@ struct Scene {
     renderer: Option<Renderer>,
     window: Arc<Window>,
     sample: Sample,
+    playback: Option<Playback>,
+    wants_bc7: bool,
     passthrough: bool,
     visible: bool,
     surface_retried: bool,
@@ -57,7 +61,7 @@ impl Scene {
         let window = Arc::new(
             event_loop.create_window(
                 Window::default_attributes()
-                    .with_title("Desktop Pet ChatGPT — P1a")
+                    .with_title("Desktop Pet ChatGPT — P1")
                     .with_inner_size(LogicalSize::new(256, 256))
                     .with_decorations(false)
                     .with_resizable(false)
@@ -75,8 +79,38 @@ impl Scene {
         );
         let sample = Sample::load()?;
         let mut input = WindowInput::new(&window, proxy.clone())?;
-        input.apply_hit_region(&sample)?;
-        let renderer = pollster::block_on(Renderer::new(Arc::clone(&window), &sample, proxy))?;
+        input.apply_hit_region(sample.view())?;
+        let variant = match std::env::var("DESKTOP_PET_FORMAT").as_deref() {
+            Ok("rgba8") => Variant::Rgba8,
+            Ok("bc7") => Variant::Bc7,
+            Ok("png") | Err(_) => Variant::Png,
+            Ok(other) => {
+                eprintln!("Unknown asset format {other}; using PNG");
+                Variant::Png
+            }
+        };
+        let mut playback =
+            std::env::var_os("DESKTOP_PET_PACK").and_then(|root| {
+                match Playback::open(Path::new(&root), variant, proxy.clone()) {
+                    Ok(playback) => Some(playback),
+                    Err(error) => {
+                        eprintln!("Could not open asset pack; using placeholder: {error}");
+                        None
+                    }
+                }
+            });
+        let wants_bc7 = playback.is_some() && variant == Variant::Bc7;
+        let renderer = pollster::block_on(Renderer::new(
+            Arc::clone(&window),
+            sample.view(),
+            wants_bc7,
+            proxy,
+        ))?;
+        if !renderer.supports_bc7()
+            && let Some(playback) = &mut playback
+        {
+            playback.use_compatible_format();
+        }
         window.set_visible(true);
         window.request_redraw();
         Ok(Self {
@@ -84,6 +118,8 @@ impl Scene {
             renderer: Some(renderer),
             window,
             sample,
+            playback,
+            wants_bc7,
             passthrough: false,
             visible: true,
             surface_retried: false,
@@ -105,10 +141,61 @@ impl Scene {
     }
 
     fn set_visible(&mut self, visible: bool) {
+        if self.visible
+            && !visible
+            && let Some(playback) = &mut self.playback
+        {
+            playback.pause();
+        }
         self.visible = visible;
         self.window.set_visible(visible);
         if visible {
             self.window.request_redraw();
+        }
+    }
+
+    fn refresh_frame(&mut self) -> Result<(), String> {
+        let (key, frame) = self
+            .playback
+            .as_ref()
+            .and_then(Playback::frame)
+            .map_or((None, self.sample.view()), |(key, frame)| {
+                (Some(key), frame)
+            });
+        if let Some(renderer) = &mut self.renderer {
+            renderer.show(key, frame)?;
+        }
+        self.input.invalidate_hit_region();
+        self.input.apply_hit_region(frame)?;
+        self.window.request_redraw();
+        Ok(())
+    }
+
+    fn fallback(&mut self, error: impl std::fmt::Display) -> Result<(), String> {
+        eprintln!("Asset playback stopped; using placeholder: {error}");
+        self.playback = None;
+        self.refresh_frame()
+    }
+
+    fn playback_deadline(&mut self) -> Result<Option<Instant>, String> {
+        if !self.visible || self.window.is_minimized() == Some(true) {
+            return Ok(None);
+        }
+        let Some(playback) = &mut self.playback else {
+            return Ok(None);
+        };
+        match playback.tick(Instant::now()) {
+            Ok((changed, deadline)) => {
+                if changed && let Err(error) = self.refresh_frame() {
+                    self.fallback(error)?;
+                    return Ok(None);
+                }
+                Ok(deadline)
+            }
+            Err(error) => {
+                self.fallback(error)?;
+                Ok(None)
+            }
         }
     }
 
@@ -201,11 +288,19 @@ impl ApplicationHandler<InputEvent> for App {
             }
             InputEvent::ResumeDisplay => {
                 scene.surface_retried = false;
+                if let Some(playback) = &mut scene.playback {
+                    playback.pause();
+                }
                 if scene.visible {
                     scene.window.request_redraw();
                 }
                 if let Some(preview) = &self.preview {
                     preview.window.request_redraw();
+                }
+            }
+            InputEvent::PageReady(result) => {
+                if let Some(playback) = &mut scene.playback {
+                    playback.accept(result);
                 }
             }
             InputEvent::PetDeviceLost => {
@@ -218,13 +313,25 @@ impl ApplicationHandler<InputEvent> for App {
                 drop(scene.renderer.take());
                 match pollster::block_on(Renderer::new(
                     scene.window.clone(),
-                    &scene.sample,
+                    scene.sample.view(),
+                    scene.wants_bc7 && scene.playback.is_some(),
                     self.proxy.clone(),
                 )) {
                     Ok(renderer) => {
+                        if let Some(playback) = &mut scene.playback {
+                            if !renderer.supports_bc7() {
+                                playback.use_compatible_format();
+                            }
+                            playback.invalidate_frame();
+                        }
                         scene.renderer = Some(renderer);
                         scene.surface_retried = false;
-                        scene.window.request_redraw();
+                        if let Err(error) =
+                            scene.refresh_frame().or_else(|error| scene.fallback(error))
+                        {
+                            self.error = Some(error.into());
+                            event_loop.exit();
+                        }
                     }
                     Err(error) => {
                         self.error = Some(error);
@@ -255,7 +362,12 @@ impl ApplicationHandler<InputEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
-                if let Err(error) = scene.input.apply_hit_region(&scene.sample) {
+                let frame = scene
+                    .playback
+                    .as_ref()
+                    .and_then(Playback::frame)
+                    .map_or(scene.sample.view(), |(_, frame)| frame);
+                if let Err(error) = scene.input.apply_hit_region(frame) {
                     self.error = Some(error.into());
                     event_loop.exit();
                 }
@@ -279,7 +391,21 @@ impl ApplicationHandler<InputEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let deadline = self.preview.as_mut().and_then(Preview::repaint_deadline);
+        let preview = self.preview.as_mut().and_then(Preview::repaint_deadline);
+        let pet = match self
+            .scene
+            .as_mut()
+            .map(Scene::playback_deadline)
+            .transpose()
+        {
+            Ok(deadline) => deadline.flatten(),
+            Err(error) => {
+                self.error = Some(error.into());
+                event_loop.exit();
+                return;
+            }
+        };
+        let deadline = preview.into_iter().chain(pet).min();
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 }

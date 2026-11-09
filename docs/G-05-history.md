@@ -85,3 +85,7 @@ winit、wgpu DX12 和 DirectComposition 呈现自有 PNG。参考机在黑、白
 ## 2026-11-09 · P1b-01 离线资源验收完成
 
 交付 manifest v1、Rust 校验器和两套同源 PNG/RGBA/BC7 自有样本。两包通过完整校验，13 个坏包按预期拒绝。记录复现命令、体积、转换时间与独立 BC7 解码误差，见 [R-05](records/R-05-p1b-offline-packs.md)。下一节点为 P1b-02。
+
+## 2026-11-09 · P1b-02 有界播放
+
+本地及远端阶段分支改为 `codex/p1`，保留已有 P1a、P1b 提交。接通三种素材档和后台读页，验证配置重启换包、错误回退与代次取消。证据见 [R-06](records/R-06-p1b-bounded-playback.md)。P1b-03 为 P1 合并前的下一关口。

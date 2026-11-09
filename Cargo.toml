@@ -6,6 +6,7 @@ rust-version = "1.99.1"
 default-run = "desktop-pet-chatgpt"
 
 [dependencies]
+bcdec_rs = "=0.2.0"
 png = "=0.18.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
