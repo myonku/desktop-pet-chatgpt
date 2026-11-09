@@ -37,10 +37,14 @@ const SUBCLASS_ID: usize = 1;
 pub enum InputEvent {
     TrayMenu(PhysicalPosition<i32>),
     TaskbarCreated,
+    ResumeDisplay,
+    PetDeviceLost,
 }
 
 pub enum Command {
     TogglePassthrough,
+    OpenPreview,
+    ToggleVisibility,
     Exit,
 }
 
@@ -139,6 +143,7 @@ impl WindowInput {
         &self,
         position: Option<PhysicalPosition<i32>>,
         passthrough: bool,
+        visible: bool,
     ) -> windows::core::Result<Option<Command>> {
         // The popup is owned by this HWND and dispatched on its event thread.
         unsafe {
@@ -158,6 +163,17 @@ impl WindowInput {
             let enabled = if self.tray { MF_ENABLED } else { MF_GRAYED };
             AppendMenuW(menu.0, MF_STRING | check | enabled, 1, w!("全窗口鼠标穿透"))?;
             AppendMenuW(menu.0, MF_STRING, 2, w!("退出原型"))?;
+            AppendMenuW(menu.0, MF_STRING, 3, w!("中文输入预览"))?;
+            AppendMenuW(
+                menu.0,
+                MF_STRING | enabled,
+                4,
+                if visible {
+                    w!("隐藏桌宠")
+                } else {
+                    w!("显示桌宠")
+                },
+            )?;
             let previous = GetForegroundWindow();
             let _ = SetForegroundWindow(self.hwnd);
             let selected = TrackPopupMenu(
@@ -177,6 +193,8 @@ impl WindowInput {
             Ok(match selected.0 {
                 1 if self.tray => Some(Command::TogglePassthrough),
                 2 => Some(Command::Exit),
+                3 => Some(Command::OpenPreview),
+                4 if self.tray => Some(Command::ToggleVisibility),
                 _ => None,
             })
         }
@@ -388,6 +406,9 @@ unsafe extern "system" fn window_proc(
         return LRESULT(MA_NOACTIVATE as isize);
     }
     match message {
+        WM_POWERBROADCAST if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize => {
+            let _ = callback.proxy.send_event(InputEvent::ResumeDisplay);
+        }
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => callback.drag.set(Drag::start(hwnd, lparam)),
         WM_MOUSEMOVE if wparam.0 & MK_LBUTTON.0 as usize != 0 => {
             if let Some(drag) = callback.drag.get() {

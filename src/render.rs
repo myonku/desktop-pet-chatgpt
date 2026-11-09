@@ -1,8 +1,8 @@
 use std::{error::Error, sync::Arc};
 
-use winit::window::Window;
+use winit::{event_loop::EventLoopProxy, window::Window};
 
-use crate::sample::Sample;
+use crate::{platform::windows::InputEvent, sample::Sample};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const ALPHA: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PreMultiplied;
@@ -18,7 +18,11 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>, sample: &Sample) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(
+        window: Arc<Window>,
+        sample: &Sample,
+        proxy: EventLoopProxy<InputEvent>,
+    ) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let mut descriptor = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::DX12,
@@ -43,6 +47,12 @@ impl Renderer {
             );
         }
         let (device, queue) = adapter.request_device(&Default::default()).await?;
+        device.set_device_lost_callback(move |reason, message| {
+            if reason == wgpu::DeviceLostReason::Unknown {
+                eprintln!("Pet device lost: {message}");
+                let _ = proxy.send_event(InputEvent::PetDeviceLost);
+            }
+        });
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or("no surface configuration for the DX12 adapter")?;
@@ -95,6 +105,11 @@ impl Renderer {
             sprite,
             presented: false,
         })
+    }
+
+    pub fn invalidate_surface(&mut self) {
+        self.config.width = 0;
+        self.config.height = 0;
     }
 
     pub fn draw(&mut self, width: u32, height: u32) -> Result<(), wgpu::SurfaceError> {

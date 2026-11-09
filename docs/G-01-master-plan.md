@@ -10,7 +10,7 @@
 
 ## 2. 工程事实与范围
 
-P0 工具链与托管 Windows CI 已通过。当前 Rust 原型已实现透明 PNG 首帧、alpha 命中、拖拽、托盘及穿透恢复，素材仍是编入程序的自有 PNG 样本。egui 中文输入与恢复、媒体包加载、完整桌宠行为和客户端连接均待实施。旧工程可从提交 `852f4f4` 追溯，本地忽略目录 `.legacy-v0.5.1/` 用于查阅。实机证据见 [R-02](records/R-02-p1a-first-frame.md) 和 [R-03](records/R-03-p1a-window-input.md)。
+P0 工具链与托管 Windows CI 已通过。当前 Rust 原型已实现透明 PNG 首帧、alpha 命中、拖拽、托盘及穿透恢复，素材仍是编入程序的自有 PNG 样本。egui 中文预览与恢复已通过 P1a 原型验收，媒体包加载、完整桌宠行为及客户端连接待实施。旧工程可从提交 `852f4f4` 追溯，本地忽略目录 `.legacy-v0.5.1/` 用于查阅。进度及实机证据见 [G-04](G-04-delivery-plan.md)。
 
 首发 Windows x64，Windows 11 优先验收；Windows 10 待依赖与设备验证。单角色、单桌宠实例、本地使用、可离线运行基础桌宠功能。桌面版 ChatGPT 为首个产品集成目标，既有 Codex 会话和任务机制为待验证的技术接入线索，二者不等同于已验证的统一接口。DeepSeek Harness（DSH）后续独立排期。
 

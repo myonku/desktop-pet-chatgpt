@@ -6,6 +6,8 @@ mod platform;
 mod render;
 #[cfg(windows)]
 mod sample;
+#[cfg(windows)]
+mod ui;
 
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]
