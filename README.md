@@ -20,7 +20,7 @@ cargo run --locked
 
 启动后可看到置顶的透明色阶样本。按住可见区域拖动窗口，右键打开菜单。开启全窗口鼠标穿透后，可从系统托盘中的 Desktop Pet ChatGPT 图标撤销穿透或退出。程序内置合成样本，直接运行即可。P0 工具链与托管 Windows CI 见 [R-01](docs/records/R-01-p0-baseline.md)，实机结果见 [透明首帧](docs/records/R-02-p1a-first-frame.md)和[窗口输入](docs/records/R-03-p1a-window-input.md)。
 
-更新：2026-11-07。P1a-02 窗口输入已实现，托盘实点和拖拽焦点通过维护者复测，剩余混合 DPI 跨屏验收。
+更新：2026-11-09。P1a-02 窗口输入已实现，托盘实点和拖拽焦点通过维护者复测。两块 1080p、缩放分别为 125% 和 100% 的显示器上，跨屏拖动时呈现比例自适应通过。抓取点与跨屏后的命中检查待补记，见 [R-03](docs/records/R-03-p1a-window-input.md)。
 
 ## 文档索引与阅读顺序
 
