@@ -3,9 +3,15 @@ name = "desktop-pet-chatgpt"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99.1"
+default-run = "desktop-pet-chatgpt"
+
+[dependencies]
+png = "=0.18.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-png = "=0.18.1"
 pollster = "=0.4.0"
 winit = { version = "=0.30.12", default-features = false, features = [
     "rwh_06",

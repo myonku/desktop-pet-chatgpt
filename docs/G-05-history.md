@@ -81,3 +81,7 @@ winit、wgpu DX12 和 DirectComposition 呈现自有 PNG。参考机在黑、白
 ## 2026-11-09 · P1a 验收完成
 
 双向跨屏抓取偏移、尺寸和两屏点命中通过。维护者完成中文输入与恢复实机复测。辅助窗口跨屏重绘和滚动通过，注入验证覆盖 surface 恢复、设备重建及再次丢失退出。证据见 [R-03](records/R-03-p1a-window-input.md) 与 [R-04](records/R-04-p1a-ui-recovery.md)。下一节点为 P1b-01。
+
+## 2026-11-09 · P1b-01 离线资源验收完成
+
+交付 manifest v1、Rust 校验器和两套同源 PNG/RGBA/BC7 自有样本。两包通过完整校验，13 个坏包按预期拒绝。记录复现命令、体积、转换时间与独立 BC7 解码误差，见 [R-05](records/R-05-p1b-offline-packs.md)。下一节点为 P1b-02。
