@@ -104,7 +104,9 @@ impl WindowInput {
                 let _ = Shell_NotifyIconW(NIM_DELETE, &data);
             }
             let result = (|| {
-                data.hIcon = LoadIconW(HINSTANCE::default(), IDI_APPLICATION).ok()?;
+                data.hIcon = LoadIconW(HINSTANCE::default(), IDI_APPLICATION)
+                    .map_err(|error| eprintln!("Could not load tray icon: {error}"))
+                    .ok()?;
                 data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
                 data.uCallbackMessage = TRAY_MESSAGE;
                 for (slot, ch) in data
@@ -114,11 +116,15 @@ impl WindowInput {
                 {
                     *slot = ch;
                 }
-                Shell_NotifyIconW(NIM_ADD, &data).as_bool().then_some(())?;
+                if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+                    eprintln!("Shell_NotifyIconW(NIM_ADD) failed");
+                    return None;
+                }
                 data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
                 if Shell_NotifyIconW(NIM_SETVERSION, &data).as_bool() {
                     return Some(());
                 }
+                eprintln!("Shell_NotifyIconW(NIM_SETVERSION) failed");
                 let _ = Shell_NotifyIconW(NIM_DELETE, &data);
                 None
             })();

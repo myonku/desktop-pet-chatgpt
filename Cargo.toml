@@ -7,9 +7,27 @@ rust-version = "1.99.1"
 [target.'cfg(windows)'.dependencies]
 png = "=0.18.1"
 pollster = "=0.4.0"
-winit = { version = "=0.30.12", default-features = false, features = ["rwh_06"] }
-wgpu = { version = "=27.0.1", default-features = false, features = ["std", "dx12", "wgsl"] }
+winit = { version = "=0.30.12", default-features = false, features = [
+    "rwh_06",
+] }
+wgpu = { version = "=27.0.1", default-features = false, features = [
+    "std",
+    "dx12",
+    "wgsl",
+] }
 egui = { version = "=0.33.3", features = ["default_fonts"] }
-egui-winit = { version = "=0.33.3", default-features = false, features = ["clipboard"] }
-egui-wgpu = { version = "=0.33.3", default-features = false, features = ["winit"] }
-windows = { version = "=0.58.0", features = ["Win32_Graphics_DirectComposition", "Win32_Graphics_Dxgi", "Win32_Graphics_Gdi", "Win32_System_SystemServices", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+egui-winit = { version = "=0.33.3", default-features = false, features = [
+    "clipboard",
+] }
+egui-wgpu = { version = "=0.33.3", default-features = false, features = [
+    "winit",
+] }
+windows = { version = "=0.58.0", features = [
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Gdi",
+    "Win32_System_SystemServices",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
