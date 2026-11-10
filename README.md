@@ -1,6 +1,6 @@
 # GPT 白龙娘桌宠
 
-面向 Windows 的非官方桌宠项目，正在从旧版 Python/Qt 工程迁移到 Rust。设计与推进计划已形成，**当前代码仅为 Cargo 骨架，尚无可运行的桌宠界面**。
+面向 Windows 的非官方桌宠项目，正在从旧版 Python/Qt 工程迁移到 Rust。**P1b 本地有界播放原型已通过验收**，包含 P1a 的透明窗口、拖拽、托盘和中文输入预览。媒体格式、分页及原型预算见 [R-08](docs/records/R-08-p1b-representative-validation.md)。
 
 本仓库从 **v0.1.0** 独立编号，对应源仓库 **v0.5.1** 的迁移重构起点。首发目标为 Windows x64，Windows 11 优先验证；其他系统尚不承诺支持。
 
@@ -8,7 +8,7 @@
 
 透明动画、拖拽、自移动、吸边、大小调节、托盘、隐藏与音效；普通桌宠可离线使用。外部集成为可选能力，计划提供任务提醒、额度和会话交互。桌面版 ChatGPT 为首个产品目标，既有 Codex 接入机制需按客户端版本重新验证；DeepSeek Harness（DSH）后续独立排期。
 
-技术方向为 Rust + winit + wgpu/WGSL + Windows API，egui 提供设置及聊天界面。媒体先验证透明 PNG，再比较有界 PNG/RGBA 与离线 BC7 资源；BC7 尚未确定为默认。目标用户包不依赖 Python/Qt 或运行时 FFmpeg，性能与兼容性尚未实测。
+技术方向为 Rust + winit + wgpu/WGSL + Windows API，egui 提供设置及聊天界面。P1b 选定透明 PNG 为默认和兼容档，普通构建可用 PNG-only 包离线运行。FFmpeg 用于开发对照，正式部署和设备范围在 P4 验收。
 
 ## 当前运行方式
 
@@ -18,9 +18,13 @@
 cargo run --locked
 ```
 
-目前只输出骨架提示。已锁定 GUI 依赖。P0 本地实施结果见 [R-01](docs/records/R-01-p0-baseline.md)，托管 Windows CI 首次回执待验收，随后进入 P1a 透明窗口原型。历史 Python 安装和构建命令不适用于当前分支。
+启动后可看到置顶的透明色阶样本。按住可见区域拖动窗口，右键打开菜单。开启全窗口鼠标穿透后，可从系统托盘中的 Desktop Pet ChatGPT 图标撤销穿透或退出。程序内置合成样本，直接运行即可。P0 工具链与托管 Windows CI 见 [R-01](docs/records/R-01-p0-baseline.md)，实机结果见 [透明首帧](docs/records/R-02-p1a-first-frame.md)和[窗口输入](docs/records/R-03-p1a-window-input.md)。
 
-更新：2026-11-07。设计基线已整理；代码仍为 Cargo 0.1.0 输出骨架。P0 的工具链、行为和实验基线已建立，P1 窗口与媒体原型待实施。文档中的功能、架构和预算是实施目标，不是现有能力。
+更新：2026-11-09。P1a-02 窗口输入已实现，托盘实点和拖拽焦点通过维护者复测。两块 1080p、缩放分别为 125% 和 100% 的显示器上，双向跨屏的尺寸、抓取点与命中均通过，见 [R-03](docs/records/R-03-p1a-window-input.md)。
+
+在右键菜单选择「中文输入预览」打开独立窗口。托盘菜单可隐藏或恢复桌宠。P1a-03 的实现与验收进度见 [R-04](docs/records/R-04-p1a-ui-recovery.md)。
+
+P1b 播放实验可在启动前设置 `DESKTOP_PET_PACK` 为本地素材包目录，`DESKTOP_PET_FORMAT` 默认为 `png`，可选 `rgba8` 或 `bc7`。素材包可以只包含 PNG 档，退出后更改配置即可换包。生成样本和运行命令见 [R-06](docs/records/R-06-p1b-bounded-playback.md)，代表素材和 FFmpeg 参照见 [R-08](docs/records/R-08-p1b-representative-validation.md)。
 
 ## 文档索引与阅读顺序
 
@@ -39,7 +43,7 @@ cargo run --locked
 
 | 路径 | 当前用途 |
 | --- | --- |
-| `src/` | Rust 骨架入口；目标模块结构见架构文档 |
+| `src/` | Rust 窗口、预览、有界播放、素材包解析和离线校验入口 |
 | `docs/` | 现行设计、推进与验证规范 |
 | `docs/archive/` | 已替代计划、旧版资料和审计 |
 | `assets/` | 本地素材工作目录，Git 忽略，不是当前构建必需项 |
@@ -63,7 +67,7 @@ cargo run --locked
 
 节点报告按需放入 `docs/records/` 并采用模块内 R 序列；决定和证据先写对应报告，再更新 G-04/G-05。已替代文档归档时重新分配 A 编号、注明日期、加替代入口并修正导航，不覆写历史事实。历史正文中的旧目录、平台支持和版本仅代表当时状态。
 
-根 `assets/` 和 `.legacy-v0.5.1/` 继续由 Git 忽略。原版源码可追溯到 `852f4f4`；不得将本地旧工程当作新克隆必备依赖。资源包分发方案由 P1b 根据实验决定。
+根 `assets/` 和 `.legacy-v0.5.1/` 继续由 Git 忽略。原版源码可追溯到 `852f4f4`；不得将本地旧工程当作新克隆必备依赖。P1b 本地原型从解包目录读取素材，正式分发清单在 P4 验收。
 
 ## 许可
 
