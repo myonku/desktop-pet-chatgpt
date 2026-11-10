@@ -99,6 +99,8 @@ impl Scene {
         let variant = match std::env::var("DESKTOP_PET_FORMAT").as_deref() {
             Ok("rgba8") => Variant::Rgba8,
             Ok("bc7") => Variant::Bc7,
+            #[cfg(feature = "p1b-reference")]
+            Ok("ffmpeg") => Variant::Ffmpeg,
             Ok("png") | Err(_) => Variant::Png,
             Ok(other) => {
                 eprintln!("Unknown asset format {other}; using PNG");
@@ -172,6 +174,13 @@ impl Scene {
             playback.pause();
         }
         self.visible = visible;
+        if let Some(trace) = &mut self.trace {
+            trace.pending = None;
+            eprintln!(
+                "P1b visibility: {visible} {}",
+                trace.start.elapsed().as_micros()
+            );
+        }
         self.window.set_visible(visible);
         if visible {
             self.window.request_redraw();

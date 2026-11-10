@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "p1b-reference")]
+use crate::reference::{Decoder, DecoderProcess};
 use crate::sample::FrameView;
 use desktop_pet_chatgpt::media::{Pack, PagePixels, Variant};
 
@@ -29,23 +31,35 @@ struct FrameSource {
     requests: SyncSender<Request>,
     generation: Arc<AtomicU64>,
     pending: bool,
+    #[cfg(feature = "p1b-reference")]
+    decoder_process: Option<DecoderProcess>,
 }
 
 impl FrameSource {
     fn new(
         pack: Arc<Pack>,
+        #[cfg(feature = "p1b-reference")] mut decoder: Option<Decoder>,
         deliver: impl Fn(PageResult) -> bool + Send + 'static,
     ) -> io::Result<Self> {
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
+        #[cfg(feature = "p1b-reference")]
+        let decoder_process = decoder.as_ref().map(Decoder::process);
         thread::Builder::new()
             .name("asset-page".into())
             .spawn(move || {
                 while let Ok(request) = receiver.recv() {
-                    let pixels = pack.load_page(request.index, request.variant, || {
-                        current.load(Ordering::Relaxed) != request.generation
-                    });
+                    let cancelled = || current.load(Ordering::Relaxed) != request.generation;
+                    #[cfg(feature = "p1b-reference")]
+                    let pixels = match &mut decoder {
+                        Some(decoder) => {
+                            decoder.load_page(request.index, request.generation, cancelled)
+                        }
+                        None => pack.load_page(request.index, request.variant, cancelled),
+                    };
+                    #[cfg(not(feature = "p1b-reference"))]
+                    let pixels = pack.load_page(request.index, request.variant, cancelled);
                     let result = PageResult {
                         generation: request.generation,
                         index: request.index,
@@ -60,6 +74,8 @@ impl FrameSource {
             requests,
             generation,
             pending: false,
+            #[cfg(feature = "p1b-reference")]
+            decoder_process,
         })
     }
 
@@ -85,6 +101,10 @@ impl FrameSource {
 
     fn cancel(&self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "p1b-reference")]
+        if let Some(process) = &self.decoder_process {
+            process.stop();
+        }
     }
 }
 
@@ -160,8 +180,17 @@ impl Playback {
             looping: action.looping,
         };
         let pack_id = manifest.pack_id.clone();
+        #[cfg(feature = "p1b-reference")]
+        let decoder = (variant == Variant::Ffmpeg)
+            .then(|| Decoder::new(manifest))
+            .transpose()?;
         Ok(Self {
-            source: FrameSource::new(pack, deliver)?,
+            source: FrameSource::new(
+                pack,
+                #[cfg(feature = "p1b-reference")]
+                decoder,
+                deliver,
+            )?,
             timeline,
             frames,
             variant,
@@ -232,6 +261,19 @@ impl Playback {
             .is_none_or(|(index, _)| *index != page)
         {
             if self.ready.as_ref().is_some_and(|(index, _)| *index == page) {
+                let actual = self.ready.as_ref().unwrap().1.variant;
+                if actual != self.variant
+                    && self
+                        .displayed
+                        .as_ref()
+                        .is_none_or(|(_, pixels)| pixels.variant != actual)
+                {
+                    eprintln!(
+                        "Asset playback format fallback: requested {}; using {}",
+                        self.variant.label(),
+                        actual.label()
+                    );
+                }
                 self.displayed = self.ready.take();
                 changed = true;
             } else {
@@ -242,13 +284,7 @@ impl Playback {
         }
         if self.selected.is_none() {
             let pixels = &self.displayed.as_ref().unwrap().1;
-            let format = if pixels.bc7.is_some() {
-                "BC7"
-            } else if self.variant == Variant::Png {
-                "PNG"
-            } else {
-                "RGBA8"
-            };
+            let format = pixels.variant.label();
             eprintln!(
                 "Asset playback: {} ({format}, {} frames)",
                 self.pack_id,
@@ -300,6 +336,8 @@ mod tests {
             requests,
             generation: Arc::new(AtomicU64::new(0)),
             pending: true,
+            #[cfg(feature = "p1b-reference")]
+            decoder_process: None,
         };
         source.cancel();
         let result = PageResult {
@@ -309,6 +347,7 @@ mod tests {
                 size: [1, 1],
                 rgba: vec![0; 4],
                 bc7: None,
+                variant: Variant::Png,
             }),
         };
         assert!(source.accept(result).is_none());

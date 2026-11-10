@@ -1,4 +1,4 @@
-"""Compare the generated pack's RGBA, PNG, BC7 and VP9 alpha reference."""
+"""Compare RGBA, PNG, BC7 and VP9 alpha, or inspect an imported reference pack."""
 
 import argparse
 import hashlib
@@ -26,25 +26,90 @@ def crop(image, width, rect):
 
 def composite(image, width, background):
     out = bytearray(image)
+    solid = (background,) * 3 if isinstance(background, int) else background
     for i in range(0, len(image), 4):
-        x, y = (i // 4) % width, (i // 4) // width
-        bg = (224 if (x // 8 + y // 8) % 2 else 64) if background == "checker" else background
+        bg = solid
+        if background == "checker":
+            x, y = (i // 4) % width, (i // 4) // width
+            bg = (224 if (x // 8 + y // 8) % 2 else 64,) * 3
         alpha = image[i + 3]
         for c in range(3):
-            out[i + c] = (image[i + c] * alpha + bg * (255 - alpha) + 127) // 255
+            out[i + c] = (image[i + c] * alpha + bg[c] * (255 - alpha) + 127) // 255
         out[i + 3] = 255
     return out
+
+
+def compare_imported(pack_dir, pack, output):
+    """Compare the source-decoded RGBA and BC7 pages without transcoding VP9 again."""
+    action = pack["actions"][0]
+    width, height = action["logical_size"]
+    backgrounds = {"black": 0, "white": 255, "checker": "checker", "blue": (20, 70, 180)}
+    png = runpy.run_path(str(Path(__file__).with_name("generate-p1b-fixtures.py")))["png"]
+    totals = {name: {"max": 0, "sum": 0} for name in backgrounds}
+    alpha_max = alpha_added = alpha_lost = pixels = 0
+    page_sizes = dict.fromkeys(("png", "rgba8", "bc7"), 0)
+    pages = {page["id"]: page for page in pack["pages"]}
+    frames = action["frames"]
+    sample_frames = sorted({0, len(frames) // 2, len(frames) - 1})
+    for page_id, page in pages.items():
+        w, h = page["size"]
+        rgba = (pack_dir / page["rgba8"]["path"]).read_bytes()
+        encoded = (pack_dir / page["bc7"]["path"]).read_bytes()
+        bgra = texture2ddecoder.decode_bc7(encoded, w, h)
+        a, b = rgba[3::4], bgra[3::4]
+        alpha_max = max(alpha_max, max(abs(x - y) for x, y in zip(a, b)))
+        alpha_added += sum(x == 0 and y != 0 for x, y in zip(a, b))
+        alpha_lost += sum(x != 0 and y == 0 for x, y in zip(a, b))
+        pixels += len(a)
+        for fmt in page_sizes:
+            page_sizes[fmt] += (pack_dir / page[fmt]["path"]).stat().st_size
+        for index in sample_frames:
+            frame = frames[index]
+            if frame["page"] != page_id:
+                continue
+            if frame["rect"][2:] != [width, height]:
+                raise ValueError("expected uncropped, full-size imported frames")
+            raw = crop(rgba, w, frame["rect"])
+            test = bytearray(crop(bgra, w, frame["rect"]))
+            test[0::4], test[2::4] = test[2::4], test[0::4]
+            for name, bg in backgrounds.items():
+                ref, bc = composite(raw, width, bg), composite(test, width, bg)
+                for channel in range(3):
+                    diffs = [abs(x - y) for x, y in zip(ref[channel::4], bc[channel::4])]
+                    totals[name]["sum"] += sum(diffs)
+                    totals[name]["max"] = max(totals[name]["max"], max(diffs))
+                stride = width * 4
+                sheet = b"".join(image[i:i + stride] for i in range(0, len(ref), stride)
+                                 for image in (ref, bc))
+                (output / f"frame-{index}-{name}.png").write_bytes(png(sheet, width * 2, height))
+    channels = len(sample_frames) * width * height * 3
+    return {"frames": len(frames), "pixels": pixels, "sample_frames": sample_frames,
+            "page_payload_bytes": page_sizes,
+            "bc7_alpha_max": alpha_max, "bc7_alpha_added_pixels": alpha_added,
+            "bc7_alpha_lost_pixels": alpha_lost,
+            "composite_errors": {name: {"max": item["max"], "mae": round(item["sum"] / channels, 4)}
+                                 for name, item in totals.items()}}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pack", type=Path, required=True)
-    parser.add_argument("--ffmpeg", type=Path, required=True)
+    parser.add_argument("--ffmpeg", type=Path)
+    parser.add_argument("--imported", action="store_true",
+                        help="compare the source-decoded RGBA and BC7 pages from a local import")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if not args.imported and args.ffmpeg is None:
+        parser.error("--ffmpeg is required for a generated fixture")
     args.output.mkdir(parents=True, exist_ok=False)
     manifest = (args.pack / "manifest.json").read_bytes()
     pack = json.loads(manifest)
+    if args.imported:
+        result = compare_imported(args.pack, pack, args.output)
+        result["manifest_sha256"] = hashlib.sha256(manifest).hexdigest()
+        (args.output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(result))
+        return
     action = pack["actions"][0]
     width, height = action["logical_size"]
     durations = [f["duration_us"] for f in action["frames"]]

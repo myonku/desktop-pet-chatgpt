@@ -4,6 +4,8 @@ mod app;
 mod platform;
 #[cfg(windows)]
 mod playback;
+#[cfg(all(windows, feature = "p1b-reference"))]
+mod reference;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]

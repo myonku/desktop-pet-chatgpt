@@ -3,11 +3,12 @@ use std::cell::Cell;
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Graphics::Dwm::DwmFlush,
         Graphics::Gdi::{
             ClientToScreen, CombineRgn, CreateRectRgn, DeleteObject, HRGN, RGN_ERROR, RGN_OR,
             SetWindowRgn,
         },
-        System::SystemServices::MK_LBUTTON,
+        System::{SystemInformation::GetTickCount, SystemServices::MK_LBUTTON},
         UI::{
             HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
             Shell::{
@@ -45,6 +46,7 @@ struct Callback {
     proxy: EventLoopProxy<AppEvent>,
     taskbar_created: u32,
     drag: Cell<Option<Drag>>,
+    trace_input: bool,
 }
 
 pub struct WindowInput {
@@ -66,6 +68,7 @@ impl WindowInput {
             proxy,
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
             drag: Cell::new(None),
+            trace_input: std::env::var_os("DESKTOP_PET_TRACE_INPUT").is_some(),
         });
         if !unsafe {
             SetWindowSubclass(
@@ -412,7 +415,18 @@ unsafe extern "system" fn window_proc(
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => callback.drag.set(Drag::start(hwnd, lparam)),
         WM_MOUSEMOVE if wparam.0 & MK_LBUTTON.0 as usize != 0 => {
             if let Some(drag) = callback.drag.get() {
-                callback.drag.set(Some(drag.update(hwnd, lparam)));
+                let started = callback
+                    .trace_input
+                    .then(|| unsafe { GetMessageTime() as u32 });
+                let drag = drag.update(hwnd, lparam);
+                callback.drag.set(Some(drag));
+                if let Some(started) = started
+                    && drag.moving
+                    && unsafe { DwmFlush() }.is_ok()
+                {
+                    let latency = unsafe { GetTickCount() }.wrapping_sub(started);
+                    eprintln!("P1b drag compositor flush: {latency} ms");
+                }
             }
         }
         WM_MOUSEMOVE | WM_LBUTTONUP | WM_CANCELMODE | WM_CAPTURECHANGED => {

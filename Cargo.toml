@@ -5,6 +5,9 @@ edition = "2024"
 rust-version = "1.99.1"
 default-run = "desktop-pet-chatgpt"
 
+[features]
+p1b-reference = []
+
 [dependencies]
 bcdec_rs = "=0.2.0"
 png = "=0.18.1"
@@ -31,8 +34,10 @@ egui-wgpu = { version = "=0.33.3", default-features = false, features = [
 ] }
 windows = { version = "=0.58.0", features = [
     "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Gdi",
+    "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",

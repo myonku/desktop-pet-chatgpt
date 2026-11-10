@@ -101,3 +101,7 @@ winit、wgpu DX12 和 DirectComposition 呈现自有 PNG。参考机在黑、白
 ## 2026-11-10 · P1b-03 格式初测
 
 在 `d6bac21` 后增加可选播放跟踪及两个采样脚本。完成两包三档 Windows Release 短测、离线 VP9 alpha 参照及合成画质与体积对照，记录于 [R-07](records/R-07-p1b-format-comparison.md)。PNG 保留为原型缺省；继续验证长时、输入延迟、同场景 FFmpeg、真实素材及完整分发预算。P1 后续提交留在本地，合并前配置 CI 手动触发后一次性推送。
+
+## 2026-11-10 · P1b-03 代表素材与同路径参照
+
+在 `13fad82` 后接入开发专用 FFmpeg 有界参照、PNG-only 清单和进程/GPU 采样。三段代表素材的 PNG 与参考 RGBA8 一致。当前 BC7 档改变透明命中轮廓，继续使用 PNG 缺省。四档代表场景短测均无跳帧，PNG-only 兼容回退和默认/参照各 6 项 Rust 测试通过。证据及待验项目见 [R-08](records/R-08-p1b-representative-validation.md)。

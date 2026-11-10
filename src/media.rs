@@ -12,7 +12,7 @@ const MANIFEST_LIMIT: usize = 1024 * 1024;
 const PAGE_LIMIT: usize = 32 * 1024 * 1024;
 const AUX_LIMIT: usize = 1024 * 1024;
 const MAX_SIDE: u32 = 4096;
-const PLAYBACK_PAGE_LIMIT: usize = 6 * 1024 * 1024;
+pub const PLAYBACK_PAGE_LIMIT: usize = 6 * 1024 * 1024;
 const PNG_STAGING_LIMIT: usize = 3 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,12 +20,27 @@ pub enum Variant {
     Png,
     Rgba8,
     Bc7,
+    #[cfg(feature = "p1b-reference")]
+    Ffmpeg,
+}
+
+impl Variant {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Png => "PNG",
+            Self::Rgba8 => "RGBA8",
+            Self::Bc7 => "BC7",
+            #[cfg(feature = "p1b-reference")]
+            Self::Ffmpeg => "FFMPEG",
+        }
+    }
 }
 
 pub struct PagePixels {
     pub size: [u32; 2],
     pub rgba: Vec<u8>,
     pub bc7: Option<Vec<u8>>,
+    pub variant: Variant,
 }
 
 #[derive(Deserialize)]
@@ -49,7 +64,7 @@ pub struct Page {
     pub id: String,
     pub size: [u32; 2],
     pub png: Payload,
-    pub rgba8: Payload,
+    pub rgba8: Option<Payload>,
     pub bc7: Option<Payload>,
 }
 
@@ -164,7 +179,10 @@ impl Pack {
             {
                 return Err(invalid(format!("invalid or duplicate page {}", page.id)));
             }
-            for payload in [&page.png, &page.rgba8].into_iter().chain(&page.bc7) {
+            for payload in std::iter::once(&page.png)
+                .chain(&page.rgba8)
+                .chain(&page.bc7)
+            {
                 self.validate_path(payload)?;
             }
         }
@@ -263,11 +281,18 @@ impl Pack {
             .ok_or_else(|| invalid("unknown page"))?;
         let [width, height] = page.size;
         let bytes = width as usize * height as usize * 4;
-        let bc7 = match variant {
-            Variant::Bc7 => page.bc7.as_ref(),
-            _ => None,
+        let (variant, payload) = match (variant, &page.bc7, &page.rgba8) {
+            (Variant::Bc7, Some(bc7), _) => (Variant::Bc7, bc7),
+            (Variant::Rgba8 | Variant::Bc7, _, Some(rgba8)) => (Variant::Rgba8, rgba8),
+            #[cfg(feature = "p1b-reference")]
+            (Variant::Ffmpeg, _, _) => return Err(invalid("FFmpeg needs the reference source")),
+            _ => (Variant::Png, &page.png),
         };
-        let extra = bc7.map_or(0, |_| bytes / 4);
+        let extra = if variant == Variant::Bc7 {
+            bytes / 4
+        } else {
+            0
+        };
         if bytes + extra > PLAYBACK_PAGE_LIMIT {
             return Err(invalid("page exceeds playback staging budget"));
         }
@@ -279,7 +304,7 @@ impl Pack {
             }
         };
         check_cancel()?;
-        let (rgba, bc7) = if let Some(payload) = bc7 {
+        let (rgba, bc7) = if variant == Variant::Bc7 {
             let data = self.read(payload, extra)?;
             check_bc7(&data, extra)?;
             check_cancel()?;
@@ -295,11 +320,11 @@ impl Pack {
             }
             (rgba, Some(data))
         } else if variant == Variant::Png {
-            let png = self.read(&page.png, PNG_STAGING_LIMIT)?;
+            let png = self.read(payload, PNG_STAGING_LIMIT)?;
             check_cancel()?;
             (decode_png(png, page.size, PNG_STAGING_LIMIT)?, None)
         } else {
-            let rgba = self.read(&page.rgba8, bytes)?;
+            let rgba = self.read(payload, bytes)?;
             if rgba.len() != bytes {
                 return Err(invalid("invalid RGBA8 page length"));
             }
@@ -310,6 +335,7 @@ impl Pack {
             size: page.size,
             rgba,
             bc7,
+            variant,
         })
     }
 
@@ -319,7 +345,9 @@ impl Pack {
             let rgba_bytes = w as usize * h as usize * 4;
             let png = self.read(&page.png, PAGE_LIMIT)?;
             let decoded = decode_png(png, page.size, PAGE_LIMIT)?;
-            if self.read(&page.rgba8, rgba_bytes)? != decoded {
+            if let Some(rgba8) = &page.rgba8
+                && self.read(rgba8, rgba_bytes)? != decoded
+            {
                 return Err(invalid("PNG and raw RGBA8 payloads differ"));
             }
             if let Some(bc7) = &page.bc7 {
@@ -453,6 +481,48 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_only_pages_validate_and_supply_both_compatibility_fallbacks() {
+        let digest = format!(
+            "{:x}",
+            Sha256::digest(include_bytes!("render/alpha-color.png"))
+        );
+        let manifest = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "pack_id": "png-only",
+            "pack_version": "1",
+            "color_space": "sRGB",
+            "alpha": "straight",
+            "source_sha256": [&digest],
+            "tools": {"fixture": "embedded"},
+            "pages": [{"id": "first", "size": [128, 128], "png": {
+                "path": "src/render/alpha-color.png", "sha256": digest,
+            }}],
+            "actions": [{
+                "id": "idle", "logical_size": [128, 128], "looping": true,
+                "anchor": [0.5, 1], "offset": [0, 0], "scale": 1, "directions": [],
+                "frames": [{"page": "first", "rect": [0, 0, 128, 128], "duration_us": 33333}],
+            }],
+            "resources": [],
+        }))
+        .unwrap();
+        let pack = Pack {
+            root: Path::new(env!("CARGO_MANIFEST_DIR"))
+                .canonicalize()
+                .unwrap(),
+            manifest,
+        };
+        pack.validate_manifest().unwrap();
+        pack.validate_payloads().unwrap();
+        let baseline = pack.load_page(0, Variant::Png, || false).unwrap();
+        for requested in [Variant::Rgba8, Variant::Bc7] {
+            let actual = pack.load_page(0, requested, || false).unwrap();
+            assert_eq!(actual.variant, Variant::Png);
+            assert_eq!(actual.rgba, baseline.rgba);
+            assert!(actual.bc7.is_none());
+        }
+    }
 
     #[test]
     fn resource_lookup_prefers_client_then_generic() {
