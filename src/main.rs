@@ -1,21 +1,6 @@
-#[cfg(windows)]
-mod app;
-#[cfg(windows)]
-mod platform;
-#[cfg(windows)]
-mod playback;
-#[cfg(all(windows, feature = "p1b-reference"))]
-mod reference;
-#[cfg(windows)]
-mod render;
-#[cfg(windows)]
-mod sample;
-#[cfg(windows)]
-mod ui;
-
 fn main() -> std::process::ExitCode {
     #[cfg(windows)]
-    let result = app::run();
+    let result = desktop_pet_chatgpt::run();
     #[cfg(not(windows))]
     let result: Result<(), Box<dyn std::error::Error>> =
         Err("the transparent-window prototype requires Windows".into());

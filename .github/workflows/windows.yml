@@ -16,6 +16,7 @@ jobs:
           persist-credentials: false
       - run: rustc -Vv
       - run: cargo fmt --check
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo build --locked
       - run: cargo test --locked
+      - run: cargo test --locked --all-features

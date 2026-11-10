@@ -1,3 +1,8 @@
 /target/
 /.legacy-v0.5.1/
-/assets/
+/assets/*
+!/assets/README.md
+
+/artifacts/*
+!/artifacts/README.md
+/desktop-pet.dev.toml
