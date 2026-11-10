@@ -74,20 +74,19 @@ impl Scene {
         event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<AppEvent>,
     ) -> Result<Self, Box<dyn Error>> {
-        let window = Arc::new(
-            event_loop.create_window(
-                Window::default_attributes()
-                    .with_title("Desktop Pet ChatGPT — P1")
-                    .with_inner_size(LogicalSize::new(256, 256))
-                    .with_decorations(false)
-                    .with_resizable(false)
-                    .with_active(false)
-                    .with_visible(false)
-                    .with_window_level(WindowLevel::AlwaysOnTop)
-                    .with_transparent(true)
-                    .with_no_redirection_bitmap(true),
-            )?,
-        );
+        let attributes = Window::default_attributes()
+            .with_title("Desktop Pet ChatGPT — P1")
+            .with_inner_size(LogicalSize::new(256, 256))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_active(false)
+            .with_visible(false)
+            .with_window_level(WindowLevel::AlwaysOnTop)
+            .with_transparent(true)
+            .with_no_redirection_bitmap(true);
+        #[cfg(feature = "p1b-reference")]
+        let attributes = crate::reference::client_geometry(attributes)?;
+        let window = Arc::new(event_loop.create_window(attributes)?);
         eprintln!(
             "Window: DPI scale {:.2}, client size {:?}",
             window.scale_factor(),

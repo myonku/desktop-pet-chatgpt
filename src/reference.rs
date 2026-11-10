@@ -10,6 +10,30 @@ use std::{
 
 use desktop_pet_chatgpt::media::{Manifest, PLAYBACK_PAGE_LIMIT, PagePixels, Variant};
 use sha2::{Digest, Sha256};
+use winit::{
+    dpi::{PhysicalPosition, PhysicalSize},
+    window::WindowAttributes,
+};
+
+pub fn client_geometry(attributes: WindowAttributes) -> io::Result<WindowAttributes> {
+    let value = match std::env::var("DESKTOP_PET_REFERENCE_CLIENT") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(attributes),
+        Err(error) => return Err(io::Error::other(error)),
+    };
+    let fields: Vec<_> = value.split(',').collect();
+    if let [side, x, y] = fields.as_slice()
+        && let (Ok(side @ (256 | 320 | 512)), Ok(x), Ok(y)) =
+            (side.parse(), x.parse::<i32>(), y.parse::<i32>())
+    {
+        return Ok(attributes
+            .with_inner_size(PhysicalSize::new(side, side))
+            .with_position(PhysicalPosition::new(x, y)));
+    }
+    Err(io::Error::other(
+        "DESKTOP_PET_REFERENCE_CLIENT needs side,x,y with side 256, 320 or 512",
+    ))
+}
 
 #[derive(Clone, Default)]
 pub struct DecoderProcess(Arc<Mutex<Option<Child>>>);

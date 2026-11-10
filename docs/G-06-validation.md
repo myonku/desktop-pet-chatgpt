@@ -48,7 +48,7 @@ CI：Windows locked build、fmt、clippy、现有纯逻辑/契约测试；自有
 | 播放丢帧 | 24/30fps 原时间序列；稳定播放 <1%，报告缺失应呈现帧/应呈现帧数 | P0 |
 | CPU 素材缓冲 | 初始 32 MiB，包含读取/解码/排队中的分配 | P1b |
 | GPU 素材池 | 初始 64 MiB，surface/UI/驱动另外报告 | P1b |
-| 全进程内存/完整包体 | 待测，不编造已达标上限；P0 建基线，P1b 冻结数值与依据 | P1b，未填不能退出 |
+| 全进程内存/完整包体 | P1 本地原型 private bytes 预算为播放 ≤550 MiB、同时打开预览 ≤1,100 MiB，解包和 ZIP 各 ≤80 MiB。P4 按正式装配和完整 UI 重新验收。依据见 [R-08](records/R-08-p1b-representative-validation.md) | P1b/P4 |
 | 隐藏/稳定性 | 无持续动画提交/无效解码上传；2h 常驻、100 次切换无持续资源增长 | P4 |
 
 记录 CPU/GPU/驱动、OS、DPI、构建 commit/Release 参数、素材哈希、features、进程树。CPU 定义为进程 CPU 时间/墙钟时间（一个逻辑核为 100%）；主进程、解码参照进程和可选集成子进程分列。内存记录 private bytes、working set、峰值、GPU 资源/共享显存，不能只看工作集。
