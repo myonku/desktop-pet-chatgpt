@@ -97,3 +97,7 @@ winit、wgpu DX12 和 DirectComposition 呈现自有 PNG。参考机在黑、白
 包清单检查移到后台，应用层统一持有事件，帧源用回调交付。新增素材首帧标记，与占位帧分别记录。有效代次的读页错误立即进入占位回退，避免因时间跳帧遗漏已发现的损坏。
 
 本机格式、Clippy、锁定构建和 5 项 Rust 测试通过。两包三档、无 BC7 载荷、坏哈希、超预算和缺包用例通过，额外验证后续页损坏时在素材首帧之后回退。基线 `5bd571d` 的托管 Windows 检查通过。下一关口仍为 P1b-03 的性能、画质、分页及完整包体预算决策。 [Windows Rust checks](https://github.com/myonku/desktop-pet-chatgpt/actions/runs/42581562722)
+
+## 2026-11-10 · P1b-03 格式初测
+
+在 `d6bac21` 后增加可选播放跟踪及两个采样脚本。完成两包三档 Windows Release 短测、离线 VP9 alpha 参照及合成画质与体积对照，记录于 [R-07](records/R-07-p1b-format-comparison.md)。PNG 保留为原型缺省；继续验证长时、输入延迟、同场景 FFmpeg、真实素材及完整分发预算。P1 后续提交留在本地，合并前配置 CI 手动触发后一次性推送。

@@ -100,16 +100,16 @@ struct Timeline {
 }
 
 impl Timeline {
-    fn at(&self, elapsed: Duration) -> (usize, Option<Duration>) {
+    fn at(&self, elapsed: Duration) -> (u128, Option<Duration>) {
         let total = *self.ends.last().unwrap() as u128;
         let elapsed = elapsed.as_micros();
         if !self.looping && elapsed >= total {
-            return (self.ends.len() - 1, None);
+            return ((self.ends.len() - 1) as u128, None);
         }
         let position = (elapsed % total) as u64;
         let index = self.ends.partition_point(|&end| end <= position);
         (
-            index,
+            elapsed / total * self.ends.len() as u128 + index as u128,
             Some(Duration::from_micros(self.ends[index] - position)),
         )
     }
@@ -123,7 +123,7 @@ pub struct Playback {
     epoch: Option<Instant>,
     displayed: Option<(usize, PagePixels)>,
     ready: Option<(usize, PagePixels)>,
-    selected: Option<usize>,
+    selected: Option<u128>,
     pack_id: String,
 }
 
@@ -202,7 +202,7 @@ impl Playback {
 
     pub fn frame(&self) -> Option<(usize, FrameView<'_>)> {
         let (_, pixels) = self.displayed.as_ref()?;
-        let (index, rect) = self.frames[self.selected?];
+        let (index, rect) = self.frames[(self.selected? % self.frames.len() as u128) as usize];
         Some((
             index,
             FrameView {
@@ -214,10 +214,16 @@ impl Playback {
         ))
     }
 
+    pub fn sequence(&self) -> Option<u128> {
+        self.selected
+    }
+
     pub fn tick(&mut self, now: Instant) -> io::Result<(bool, Option<Instant>)> {
-        let (frame, delay) = self
+        let (sequence, delay) = self
             .timeline
             .at(self.epoch.map_or(Duration::ZERO, |start| now - start));
+        let frame_count = self.frames.len() as u128;
+        let frame = (sequence % frame_count) as usize;
         let (page, _) = self.frames[frame];
         let mut changed = false;
         if self
@@ -250,7 +256,10 @@ impl Playback {
             );
         }
         self.epoch.get_or_insert(now);
-        changed |= self.selected.replace(frame) != Some(frame);
+        changed |= self
+            .selected
+            .replace(sequence)
+            .is_none_or(|previous| previous % frame_count != frame as u128);
         if delay.is_some() && self.ready.is_none() {
             let next = (frame + 1) % self.frames.len();
             let (next_page, _) = self.frames[next];
@@ -278,7 +287,7 @@ mod tests {
         );
         assert_eq!(
             timeline.at(Duration::from_micros(60)),
-            (0, Some(Duration::from_micros(10)))
+            (3, Some(Duration::from_micros(10)))
         );
         timeline.looping = false;
         assert_eq!(timeline.at(Duration::from_micros(61)), (2, None));

@@ -46,6 +46,12 @@ struct Scene {
     surface_retried: bool,
     device_rebuilt: bool,
     first_asset_presented: bool,
+    trace: Option<PlaybackTrace>,
+}
+
+struct PlaybackTrace {
+    start: Instant,
+    pending: Option<(u128, usize, u128)>,
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
@@ -136,6 +142,12 @@ impl Scene {
             surface_retried: false,
             device_rebuilt: false,
             first_asset_presented: false,
+            trace: std::env::var_os("DESKTOP_PET_TRACE")
+                .is_some()
+                .then(|| PlaybackTrace {
+                    start: Instant::now(),
+                    pending: None,
+                }),
         })
     }
 
@@ -174,8 +186,18 @@ impl Scene {
             .map_or((None, self.sample.view()), |(key, frame)| {
                 (Some(key), frame)
             });
+        let started = self.trace.as_ref().map(|_| Instant::now());
         if let Some(renderer) = &mut self.renderer {
             renderer.show(key, frame)?;
+        }
+        if let (Some(trace), Some(started)) = (&mut self.trace, started) {
+            let prepare_us = started.elapsed().as_micros();
+            trace.pending = self
+                .playback
+                .as_ref()
+                .and_then(Playback::sequence)
+                .zip(key)
+                .map(|(sequence, page)| (sequence, page, prepare_us));
         }
         self.input.invalidate_hit_region();
         self.input.apply_hit_region(frame)?;
@@ -241,6 +263,14 @@ impl Scene {
         match renderer.draw(size.width, size.height) {
             Ok(()) => {
                 self.surface_retried = false;
+                if let Some(trace) = &mut self.trace
+                    && let Some((sequence, page, prepare_us)) = trace.pending.take()
+                {
+                    eprintln!(
+                        "P1b frame {sequence} {page} {} {prepare_us}",
+                        trace.start.elapsed().as_micros()
+                    );
+                }
                 if !self.first_asset_presented
                     && self.playback.as_ref().and_then(Playback::frame).is_some()
                 {
