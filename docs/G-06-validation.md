@@ -46,8 +46,8 @@ CI：Windows locked build、fmt、clippy、现有纯逻辑/契约测试；自有
 | 首次可交互 | 进程启动至首帧且拖拽/菜单可用 ≤2s，不以占位单帧替代交互 | P0 口径，P1a/P1b 测量 |
 | 输入响应 | 输入事件至可见反馈 p95 ≤100ms；另报 p50/p99 | P0 |
 | 播放丢帧 | 24/30fps 原时间序列；稳定播放 <1%，报告缺失应呈现帧/应呈现帧数 | P0 |
-| CPU 素材缓冲 | 初始 32 MiB，包含读取/解码/排队中的分配 | P1b |
-| GPU 素材池 | 初始 64 MiB，surface/UI/驱动另外报告 | P1b |
+| CPU 素材缓冲 | P1b 本地原型 ≤32 MiB，包含读取/解码/排队中的分配 | P1b |
+| GPU 素材池 | P1b 本地原型 ≤64 MiB，surface/UI/驱动另外报告 | P1b |
 | 全进程内存/完整包体 | P1 本地原型 private bytes 预算为播放 ≤550 MiB、同时打开预览 ≤1,100 MiB，解包和 ZIP 各 ≤80 MiB。P4 按正式装配和完整 UI 重新验收。依据见 [R-08](records/R-08-p1b-representative-validation.md) | P1b/P4 |
 | 隐藏/稳定性 | 无持续动画提交/无效解码上传；2h 常驻、100 次切换无持续资源增长 | P4 |
 

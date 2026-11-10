@@ -105,3 +105,7 @@ winit、wgpu DX12 和 DirectComposition 呈现自有 PNG。参考机在黑、白
 ## 2026-11-10 · P1b-03 代表素材与同路径参照
 
 在 `13fad82` 后接入开发专用 FFmpeg 有界参照、PNG-only 清单和进程/GPU 采样。三段代表素材的 PNG 与参考 RGBA8 一致。当前 BC7 档改变透明命中轮廓，继续使用 PNG 缺省。四档代表场景短测均无跳帧，PNG-only 兼容回退和默认/参照各 6 项 Rust 测试通过。证据及待验项目见 [R-08](records/R-08-p1b-representative-validation.md)。
+
+## 2026-11-10 · P1b 本地原型验收完成
+
+以 `01a3350` 的同路径参照实现和 `4d77ad3` 的部署与画质验证为基础，补齐客户端重启中断的第三轮和受窗口收纳影响的 BC7 第二轮。12 组有效长测全部低于 1% 缺帧率，PNG 三轮呈现 43,203／43,203 帧。冻结 PNG 默认和兼容档、4–5 帧参考分页、解包目录与原型预算。实际 200% DPI、冷文件缓存和正式分发装配纳入 P4 验收，结果见 [R-08](records/R-08-p1b-representative-validation.md)。
