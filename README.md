@@ -33,7 +33,7 @@ cargo run --locked --features development
 .\desktop-pet-chatgpt.exe migrate bailong-history
 ```
 
-导入保留原件，遇到已有目标时会报告冲突。命令返回的迁移 ID 可用于 `migrate rollback <migration-id>`。支持的来源、备份位置及回滚规则见 [G-05](docs/G-05-contracts.md#旧数据迁移)。
+导入保留原件，遇到已有目标时会报告冲突。命令返回的迁移 ID 可用于 `migrate rollback <migration-id>`。长期存储兼容仅承诺覆盖本仓库的历史版本。上游白龙桌宠 v0.5.1 导入是临时能力，两仓库的存储设计继续分化时可能在后续迭代移除。支持的来源、备份位置及回滚规则见 [G-05](docs/G-05-contracts.md#旧数据迁移)。
 
 ## 文档索引
 
