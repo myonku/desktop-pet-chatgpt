@@ -2,7 +2,7 @@ use std::{cell::Cell, time::Instant};
 
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Dwm::DwmFlush,
         Graphics::Gdi::{
             ClientToScreen, CombineRgn, CreateRectRgn, DeleteObject, HRGN, RGN_ERROR, RGN_OR,
@@ -12,9 +12,10 @@ use windows::{
         UI::{
             HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
             Shell::{
-                DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD,
-                NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICON_VERSION_4,
-                NOTIFYICONDATAW, RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconW,
+                DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP,
+                NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT,
+                NOTIFYICON_VERSION_4, NOTIFYICONDATAW, RemoveWindowSubclass, SetWindowSubclass,
+                Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
         },
@@ -31,7 +32,11 @@ use winit::{
 use crate::{app::AppEvent, media::frame::FrameView};
 
 mod display;
+mod preferences;
+mod session;
 pub use display::{Display, physical_size};
+pub use preferences::{Autostart, Sound, startup_command};
+pub use session::{Instance, local_path, reveal_directory, user_profile};
 
 #[derive(Debug)]
 pub enum Gesture {
@@ -52,11 +57,23 @@ pub enum Command {
     OpenPreview,
     ToggleVisibility,
     ToggleAuto,
+    ToggleSound,
+    ToggleFullscreen,
+    OpenSettings,
     Expand,
     Action(usize),
     Exit,
 }
 
+pub struct MenuState<'a> {
+    pub passthrough: bool,
+    pub visible: bool,
+    pub attached: bool,
+    pub auto_move: bool,
+    pub sound: bool,
+    pub fullscreen_hide: bool,
+    pub actions: &'a [(String, bool)],
+}
 struct Callback {
     proxy: EventLoopProxy<AppEvent>,
     taskbar_created: u32,
@@ -68,6 +85,7 @@ pub struct WindowInput {
     hwnd: HWND,
     _callback: Box<Callback>,
     tray: bool,
+    instance_marker: Vec<u16>,
     hit_bounds: Option<(i32, i32, i32, i32)>,
 }
 
@@ -76,6 +94,7 @@ impl WindowInput {
         window: &Window,
         proxy: EventLoopProxy<AppEvent>,
         trace_input: bool,
+        instance_marker: &[u16],
     ) -> Result<Self, String> {
         let handle = window.window_handle().map_err(|error| error.to_string())?;
         let RawWindowHandle::Win32(handle) = handle.as_raw() else {
@@ -105,8 +124,18 @@ impl WindowInput {
             hwnd,
             _callback: callback,
             tray: false,
+            instance_marker: instance_marker.to_vec(),
             hit_bounds: None,
         };
+        // The marker lets another launch find this exact profile's window.
+        unsafe {
+            SetPropW(
+                hwnd,
+                PCWSTR(instance_marker.as_ptr()),
+                HANDLE((&*input._callback as *const Callback).cast_mut().cast()),
+            )
+            .map_err(|error| error.to_string())?;
+        }
         input.add_tray();
         Ok(input)
     }
@@ -127,9 +156,21 @@ impl WindowInput {
         self._callback.drag.get().is_some()
     }
 
+    pub fn settings_error(&self, message: &str) {
+        let text: Vec<_> = message.encode_utf16().chain([0]).collect();
+        unsafe {
+            MessageBoxW(
+                self.hwnd,
+                PCWSTR(text.as_ptr()),
+                w!("桌宠设置"),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }
     pub fn connection_hint(&self) {
         let mut data = tray_data(self.hwnd);
         data.uFlags = NIF_INFO;
+        data.dwInfoFlags = NIIF_NOSOUND;
         for (slot, ch) in data.szInfoTitle.iter_mut().zip("查询额度".encode_utf16()) {
             *slot = ch;
         }
@@ -199,12 +240,18 @@ impl WindowInput {
     pub fn menu(
         &self,
         position: Option<PhysicalPosition<i32>>,
-        passthrough: bool,
-        visible: bool,
-        auto: bool,
-        attached: bool,
-        actions: &[(String, bool)],
+        state: MenuState<'_>,
     ) -> windows::core::Result<Option<Command>> {
+        let MenuState {
+            passthrough,
+            visible,
+            attached,
+            auto_move,
+            sound,
+            fullscreen_hide,
+            actions,
+        } = state;
+        const ACTION_START: usize = 100;
         // The popup is owned by this HWND and dispatched on its event thread.
         unsafe {
             let mut point = POINT::default();
@@ -221,7 +268,16 @@ impl WindowInput {
                 MF_UNCHECKED
             };
             let enabled = if self.tray { MF_ENABLED } else { MF_GRAYED };
-            AppendMenuW(menu.0, MF_STRING | check | enabled, 1, w!("全窗口鼠标穿透"))?;
+            AppendMenuW(
+                menu.0,
+                MF_STRING | check | enabled,
+                1,
+                if self.tray {
+                    w!("全窗口鼠标穿透(&P)")
+                } else {
+                    w!("全窗口鼠标穿透（托盘不可用）")
+                },
+            )?;
             AppendMenuW(menu.0, MF_STRING, 2, w!("退出"))?;
             AppendMenuW(menu.0, MF_STRING, 3, w!("中文输入预览"))?;
             AppendMenuW(
@@ -234,10 +290,26 @@ impl WindowInput {
                     w!("显示桌宠(&H)")
                 },
             )?;
-            let auto_checked = if auto { MF_CHECKED } else { MF_UNCHECKED };
-            AppendMenuW(menu.0, MF_STRING | auto_checked, 5, w!("自移动(&M)"))?;
+            let checked = |on| if on { MF_CHECKED } else { MF_UNCHECKED };
+            AppendMenuW(menu.0, MF_STRING | checked(auto_move), 5, w!("自移动(&M)"))?;
             let expand_enabled = if attached { MF_ENABLED } else { MF_GRAYED };
             AppendMenuW(menu.0, MF_STRING | expand_enabled, 6, w!("展开(&E)"))?;
+            AppendMenuW(menu.0, MF_STRING, 7, w!("设置(&S)"))?;
+            AppendMenuW(menu.0, MF_STRING, 8, w!("桌宠大小"))?;
+            AppendMenuW(menu.0, MF_STRING | checked(sound), 9, w!("音效(&U)"))?;
+            AppendMenuW(
+                menu.0,
+                MF_STRING | checked(fullscreen_hide),
+                10,
+                w!("全屏隐藏(&F)"),
+            )?;
+            AppendMenuW(
+                menu.0,
+                MF_STRING | MF_GRAYED,
+                11,
+                w!("集成与会话（尚未接入）"),
+            )?;
+            AppendMenuW(menu.0, MF_STRING | MF_GRAYED, 12, w!("历史（尚未接入）"))?;
             let submenu = Menu(CreatePopupMenu()?);
             for (index, (label, enabled)) in actions.iter().enumerate() {
                 let label: Vec<u16> = label.encode_utf16().chain([0]).collect();
@@ -245,7 +317,7 @@ impl WindowInput {
                 AppendMenuW(
                     submenu.0,
                     MF_STRING | state,
-                    10 + index,
+                    ACTION_START + index,
                     PCWSTR(label.as_ptr()),
                 )?;
             }
@@ -275,12 +347,15 @@ impl WindowInput {
                 4 if self.tray => Some(Command::ToggleVisibility),
                 5 => Some(Command::ToggleAuto),
                 6 if attached => Some(Command::Expand),
-                id if id >= 10
+                7 | 8 => Some(Command::OpenSettings),
+                9 => Some(Command::ToggleSound),
+                10 => Some(Command::ToggleFullscreen),
+                id if id >= ACTION_START as i32
                     && actions
-                        .get((id - 10) as usize)
+                        .get(id as usize - ACTION_START)
                         .is_some_and(|(_, enabled)| *enabled) =>
                 {
-                    Some(Command::Action((id - 10) as usize))
+                    Some(Command::Action(id as usize - ACTION_START))
                 }
                 _ => None,
             })
@@ -458,6 +533,7 @@ impl Drop for WindowInput {
             if self.tray {
                 let _ = Shell_NotifyIconW(NIM_DELETE, &tray_data(self.hwnd));
             }
+            let _ = RemovePropW(self.hwnd, PCWSTR(self.instance_marker.as_ptr()));
             let _ = RemoveWindowSubclass(self.hwnd, Some(window_proc), SUBCLASS_ID);
         }
     }
@@ -512,6 +588,10 @@ unsafe extern "system" fn window_proc(
         return LRESULT(MA_NOACTIVATE as isize);
     }
     match message {
+        session::ACTIVATE_MESSAGE => {
+            let _ = callback.proxy.send_event(AppEvent::OpenSettings);
+            return LRESULT(0);
+        }
         WM_POWERBROADCAST if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize => {
             let _ = callback.proxy.send_event(AppEvent::ResumeDisplay);
         }

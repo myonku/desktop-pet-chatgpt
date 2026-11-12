@@ -2,13 +2,12 @@ use std::time::{Duration, Instant};
 
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
-    event_loop::ActiveEventLoop,
     window::Window,
 };
 
 use crate::{
     core::{Activity, Click, INTERACT, MOVE_INTERVAL, POLL_INTERVAL, Route, Side},
-    platform::windows::{Command, Display, Gesture},
+    platform::windows::{Command, Display, Gesture, MenuState},
 };
 
 use super::Scene;
@@ -66,7 +65,9 @@ impl Scene {
             .zip(display)
             .is_some_and(|(old, new)| old.device == new.device);
         self.display = display;
-        self.pet.fullscreen = display.is_some_and(|display| self.input.fullscreen(display));
+        self.pet.fullscreen = self.runtime.preferences.fullscreen_hide
+            && self.input.has_tray()
+            && display.is_some_and(|display| self.input.fullscreen(display));
         self.apply_visibility(now);
 
         if self.reference_geometry
@@ -82,7 +83,7 @@ impl Scene {
         } else if changed && matches!(self.pet.activity, Activity::Auto(_)) {
             self.finish(now);
         }
-        let size = Self::target_size(&self.window, display, self.side_dip);
+        let size = Self::target_size(&self.window, display, self.runtime.size.dip());
         if self.applied_size != Some(size) || self.window.inner_size() != size {
             if matches!(self.pet.activity, Activity::Auto(_)) {
                 self.finish(now);
@@ -135,8 +136,12 @@ impl Scene {
                 }
                 self.input.connection_hint();
             }
-            Click::Interact => self.preview_action(INTERACT),
+            Click::Interact => {
+                self.play_click_sound();
+                self.preview_action(INTERACT);
+            }
             Click::Peek => {
+                self.play_click_sound();
                 self.pet.peek = !self.pet.peek;
                 self.finish(Instant::now());
             }
@@ -261,7 +266,9 @@ impl Scene {
             self.input.cancel_gesture();
             self.pet.reset(now);
             self.play_base();
-            if !minimized && self.visible {
+            if minimized {
+                self.sound.stop();
+            } else if self.visible {
                 self.window.request_redraw();
             }
         }
@@ -345,11 +352,7 @@ impl Scene {
         Ok(())
     }
 
-    pub(super) fn menu(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        position: Option<PhysicalPosition<i32>>,
-    ) -> bool {
+    pub(super) fn menu(&mut self, position: Option<PhysicalPosition<i32>>) -> Option<Command> {
         let now = Instant::now();
         self.pet.cancel_click();
         if matches!(self.pet.activity, Activity::Auto(_)) {
@@ -402,30 +405,25 @@ impl Scene {
             .collect();
         match self.input.menu(
             position,
-            self.passthrough,
-            !self.pet.manual_hidden,
-            self.pet.auto_enabled,
-            self.pet.edge.is_some(),
-            &entries,
+            MenuState {
+                passthrough: self.passthrough,
+                visible: !self.pet.manual_hidden,
+                attached: self.pet.edge.is_some(),
+                auto_move: self.pet.auto_enabled,
+                sound: self.runtime.preferences.sound,
+                fullscreen_hide: self.runtime.preferences.fullscreen_hide,
+                actions: &entries,
+            },
         ) {
-            Ok(Some(Command::TogglePassthrough)) => self.set_passthrough(!self.passthrough),
             Ok(Some(Command::ToggleVisibility)) => {
                 self.pet.manual_hidden = !self.pet.manual_hidden;
                 self.update_display(Instant::now());
             }
-            Ok(Some(Command::ToggleAuto)) => {
-                self.pet.auto_enabled = !self.pet.auto_enabled;
-                if self.pet.activity == Activity::Base {
-                    self.pet.finish(Instant::now());
-                }
-            }
             Ok(Some(Command::Expand)) => self.expand(Instant::now()),
             Ok(Some(Command::Action(index))) => self.preview_action(&ids[index]),
-            Ok(Some(Command::OpenPreview)) => return true,
-            Ok(Some(Command::Exit)) => event_loop.exit(),
-            Ok(None) => {}
+            Ok(command) => return command,
             Err(error) => eprintln!("Could not open menu: {error}"),
         }
-        false
+        None
     }
 }

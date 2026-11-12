@@ -9,7 +9,7 @@ pub(crate) mod playback;
 mod reference;
 
 pub use manifest::{Action, Direction, Frame, Manifest, Page, Payload, Resource, ResourceContent};
-pub use pack::{PLAYBACK_PAGE_LIMIT, Pack};
+pub use pack::{LoadedResource, PLAYBACK_PAGE_LIMIT, Pack};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Variant {

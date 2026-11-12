@@ -10,6 +10,8 @@ mod platform;
 #[cfg(windows)]
 mod render;
 #[cfg(windows)]
+mod storage;
+#[cfg(windows)]
 mod ui;
 
 #[cfg(windows)]

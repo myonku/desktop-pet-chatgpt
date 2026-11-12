@@ -82,16 +82,20 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 
 产品配置中的素材路径可为绝对路径，或相对于用户配置文件目录。未指定时从 EXE 旁的 `resources/default/` 查找。遇到格式、值或超前 schema 错误，保留原文件、提示原因并使用安全缺省值。后续自动保存保留该原文件。配置原子保存、迁移和备份见 [G-03](G-03-architecture.md#5-存储与迁移)。
 
-P2-02 在设置接入前定义最小产品 schema，统一校验缺项、取值范围与路径，区分已保存的用户值和本次生效值。该节点同时确定首次推导尺寸的持久化方式，区分推导尺寸和用户手动保存的尺寸。P2-03 基于该 schema 验证旧配置导入和回退。
+P2-02 沿用 schema 1。旧配置缺少新增字段时补齐默认值。开发 TOML 保留 `initial_scale_percent` 与 `pack_path`，只覆盖本次启动，开发设置改动留在内存。
 
-首轮实现读取以下两个同名字段，按开发 TOML → 用户 JSON → 内置默认值逐字段取值。开发覆盖与用户文件分开保存。素材包路径统一从配置读取。
-
-| 字段 | 首轮规则 |
+| 字段 | 规则 |
 | --- | --- |
-| `initial_scale_percent` | 50–200 的整数，内置默认 70。乘以物理探测推导的基准。物理尺寸未知时乘以 256×256 DIP |
-| `pack_path` | 含 `manifest.json` 的本地目录。相对路径以各自配置文件所在目录为准。未设置时查找 EXE 旁的 `resources/default/`，缺包时使用占位 |
+| `initial_scale_percent` | 50–200 的整数，默认 70。无有效已保存尺寸时乘以物理探测基准，探测不可用时基准为 256 DIP |
+| `saved_size` | 可选对象，`base_dip` 为 1–4096 的逻辑基准，`percent` 为 50–200。两者共同确定已保存的逻辑边长，优先于产品初始比例和物理探测。显式开发比例可覆写 |
+| `preferences` | `auto_move`、`fullscreen_hide`、`sound`、`task_bubbles` 默认开启，`passthrough` 默认关闭，`bubble_scale_percent` 范围 50–150，默认 100 |
+| `pack_path` | 含 `manifest.json` 的本地目录。相对路径以对应配置所在目录为准。留空查找 EXE 旁的 `resources/default/`，启动时无可用包则显示占位 |
 
-用户 JSON 示例为 `{"schema_version": 1, "initial_scale_percent": 70, "pack_path": "packs/dawn"}`。开发 TOML 可省略版本，复制样板后用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。格式、跟踪与参照参数仍由 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE`、`DESKTOP_PET_TRACE_INPUT` 和参照 feature 下的 `DESKTOP_PET_REFERENCE_*` 控制。P1 采样脚本为每次运行生成独立的 100% TOML。参照构建可用 `DESKTOP_PET_REFERENCE_CLIENT=320,x,y` 固定物理窗口尺寸，或用 `auto,x,y` 和 `dip,x,y` 在指定屏上验证物理探测与 DIP 回退。运行时保存与一键恢复随 P2-02 设置界面实施。
+设置中的「应用并保存」提交配置，关闭窗口撤回未确认的预览。未改动大小时保留首次尺寸推导策略。可读取的坏配置禁止普通写入，显式恢复默认先备份原始字节；无法读取时保留原件并报告失败。写入使用同目录独立临时文件，刷盘后替换正式文件。P2-03 基于该 schema 验证旧配置导入和回退。
+
+登录自启以当前 Windows 用户的 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 内的 `DesktopPetChatGPT` 项为准。注册值是带引号的绝对 EXE 路径。只在真实用户目录的产品设置确认或恢复默认时修改。开发覆盖和独立验证配置目录不修改此项。配置替换失败时尝试恢复原注册值，并报告回滚错误。
+
+用户 JSON 示例为 `{"schema_version":1,"initial_scale_percent":70,"pack_path":"packs/dawn"}`。开发 TOML 可省略版本。格式、跟踪和参照构建参数沿用 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE`、`DESKTOP_PET_TRACE_INPUT` 和 `DESKTOP_PET_REFERENCE_*`。参照构建可用 `DESKTOP_PET_REFERENCE_CLIENT=320,x,y` 固定窗口，或用 `auto,x,y` 和 `dip,x,y` 指定目标屏验证。
 
 ## 源码、程序与素材附件
 

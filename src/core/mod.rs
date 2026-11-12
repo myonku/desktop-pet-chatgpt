@@ -1,3 +1,5 @@
+pub mod preferences;
+
 use std::time::{Duration, Instant};
 
 pub const IDLE: &str = "idle";

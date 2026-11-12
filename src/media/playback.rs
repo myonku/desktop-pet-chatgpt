@@ -1,6 +1,5 @@
 use std::{
     io,
-    path::Path,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -34,7 +33,8 @@ struct Request {
 }
 
 struct FrameSource {
-    requests: SyncSender<Request>,
+    requests: Option<SyncSender<Request>>,
+    worker: Option<thread::JoinHandle<()>>,
     generation: Arc<AtomicU64>,
     id: u64,
     pending: Option<u64>,
@@ -54,7 +54,7 @@ impl FrameSource {
         let id = NEXT_SOURCE.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "p1b-reference")]
         let decoder_process = decoder.as_ref().map(Decoder::process);
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("asset-page".into())
             .spawn(move || {
                 while let Ok(request) = receiver.recv() {
@@ -80,7 +80,8 @@ impl FrameSource {
                 }
             })?;
         Ok(Self {
-            requests,
+            requests: Some(requests),
+            worker: Some(worker),
             generation,
             id,
             pending: None,
@@ -93,6 +94,8 @@ impl FrameSource {
         if self.pending.is_none() {
             let generation = self.generation.load(Ordering::Relaxed);
             self.requests
+                .as_ref()
+                .unwrap()
                 .try_send(Request {
                     generation,
                     index,
@@ -125,6 +128,8 @@ impl FrameSource {
 impl Drop for FrameSource {
     fn drop(&mut self) {
         self.cancel();
+        drop(self.requests.take());
+        crate::platform::reap(self.worker.take());
     }
 }
 
@@ -192,11 +197,10 @@ pub struct PlaybackTick {
 
 impl Playback {
     pub fn open(
-        path: &Path,
+        pack: Arc<Pack>,
         variant: Variant,
         deliver: impl Fn(PageResult) -> bool + Send + 'static,
     ) -> io::Result<Self> {
-        let pack = Arc::new(Pack::open(path)?);
         let manifest = pack.manifest();
         let base = manifest
             .actions

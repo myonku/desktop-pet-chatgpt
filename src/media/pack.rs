@@ -21,6 +21,11 @@ pub struct Pack {
     manifest: Manifest,
 }
 
+pub enum LoadedResource {
+    Image(PagePixels),
+    Audio(Vec<u8>),
+    Text(String),
+}
 impl Pack {
     pub fn open(root: &Path) -> io::Result<Self> {
         let root = root.canonicalize()?;
@@ -48,6 +53,37 @@ impl Pack {
         matches(client_id).or_else(|| matches(None))
     }
 
+    pub fn load_resource(
+        &self,
+        key: &str,
+        client_id: Option<&str>,
+    ) -> io::Result<Option<LoadedResource>> {
+        let Some(resource) = self.resource(key, client_id) else {
+            return Ok(None);
+        };
+        let loaded = match &resource.content {
+            ResourceContent::Image { page } => {
+                let index = self
+                    .manifest
+                    .pages
+                    .iter()
+                    .position(|item| item.id == *page)
+                    .ok_or_else(|| invalid("unknown image page"))?;
+                LoadedResource::Image(self.load_page(index, Variant::Png, || false)?)
+            }
+            ResourceContent::Audio { file } => {
+                let bytes = self.read(file, AUX_LIMIT)?;
+                if !valid_pcm_wave(&bytes) {
+                    return Err(invalid("expected a canonical PCM16 WAVE audio resource"));
+                }
+                LoadedResource::Audio(bytes)
+            }
+            ResourceContent::Text { file } => LoadedResource::Text(
+                String::from_utf8(self.read(file, AUX_LIMIT)?).map_err(io::Error::other)?,
+            ),
+        };
+        Ok(Some(loaded))
+    }
     fn validate_manifest(&self) -> io::Result<()> {
         let m = &self.manifest;
         if m.schema_version != 1

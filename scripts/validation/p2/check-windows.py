@@ -91,7 +91,7 @@ def displays():
     return sorted(result, key=lambda monitor: not monitor.flags & 1)
 
 
-def find_window(pid):
+def find_window(pid, caption=TITLE):
     handles = []
 
     @ENUM_WINDOW
@@ -101,7 +101,7 @@ def find_window(pid):
         if owner.value == pid:
             title = c.create_unicode_buffer(256)
             U.GetWindowTextW(hwnd, title, len(title))
-            if title.value == TITLE:
+            if title.value == caption:
                 handles.append(hwnd)
         return True
 
@@ -198,7 +198,8 @@ class Run:
         config = output / f"{name}.toml"
         config.write_text(f"initial_scale_percent = 70\npack_path = {json.dumps(pack.as_posix(), ensure_ascii=False)}\n",
                           encoding="utf-8")
-        env = dict(os.environ, DESKTOP_PET_TRACE="1", DESKTOP_PET_FORMAT="png")
+        env = dict(os.environ, DESKTOP_PET_TRACE="1", DESKTOP_PET_FORMAT="png",
+                   LOCALAPPDATA=str(output.resolve() / "profile"))
         b = monitor.work
         env["DESKTOP_PET_REFERENCE_CLIENT"] = f"{mode},{b.left + 300},{b.top + 200}"
         self.expect_asset = expect_asset

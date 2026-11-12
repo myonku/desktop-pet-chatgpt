@@ -17,7 +17,7 @@ pub(super) struct LaunchOptions {
 }
 
 impl LaunchOptions {
-    pub fn load() -> io::Result<Self> {
+    pub fn load(root: PathBuf) -> io::Result<Self> {
         let mut args = env::args_os().skip(1);
         let dev_path = match (args.next(), args.next(), args.next()) {
             (None, None, None) => None,
@@ -28,7 +28,7 @@ impl LaunchOptions {
                 ));
             }
         };
-        let startup = StartupConfig::load(dev_path.as_deref())?;
+        let startup = StartupConfig::load(root, dev_path.as_deref())?;
         let variant = match env::var("DESKTOP_PET_FORMAT").as_deref() {
             Ok("rgba8") => Variant::Rgba8,
             Ok("bc7") => Variant::Bc7,

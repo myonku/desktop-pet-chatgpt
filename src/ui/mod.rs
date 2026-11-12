@@ -9,20 +9,24 @@ use winit::{
     window::Window,
 };
 
-pub struct Preview {
+mod settings;
+pub use settings::{SettingsAction, SettingsDraft, SettingsWindow};
+
+struct Panel {
     pub window: Arc<Window>,
     state: egui_winit::State,
     painter: Painter,
-    draft: String,
-    sample: String,
     repaint_at: Option<Instant>,
 }
 
-impl Preview {
-    pub fn open(event_loop: &ActiveEventLoop) -> Result<Self, Box<dyn Error>> {
-        let size = LogicalSize::new(560, 460);
+impl Panel {
+    fn open(
+        event_loop: &ActiveEventLoop,
+        title: &str,
+        size: LogicalSize<u32>,
+    ) -> Result<Self, Box<dyn Error>> {
         let mut attributes = Window::default_attributes()
-            .with_title("桌宠 · 中文输入预览")
+            .with_title(title)
             .with_inner_size(size)
             .with_visible(false);
         if let Some(monitor) = event_loop.primary_monitor() {
@@ -48,7 +52,7 @@ impl Preview {
             }
             context.set_fonts(fonts);
         } else {
-            eprintln!("Chinese preview: Microsoft YaHei is unavailable");
+            eprintln!("Microsoft YaHei is unavailable");
         }
         let mut painter = pollster::block_on(Painter::new(
             context.clone(),
@@ -72,15 +76,11 @@ impl Preview {
             window,
             state,
             painter,
-            draft: String::new(),
-            sample: (1..=48)
-                .map(|line| format!("{line:02}  桌宠预览文本，可选中并复制。\n"))
-                .collect(),
             repaint_at: None,
         })
     }
 
-    pub fn event(&mut self, event: &WindowEvent) {
+    fn event(&mut self, event: &WindowEvent, draw: impl FnMut(&egui::Context)) {
         let response = self.state.on_window_event(&self.window, event);
         if let WindowEvent::Resized(size) = event
             && let (Some(width), Some(height)) =
@@ -90,7 +90,7 @@ impl Preview {
                 .on_window_resized(ViewportId::ROOT, width, height);
         }
         if matches!(event, WindowEvent::RedrawRequested) {
-            self.draw();
+            self.draw(draw);
         } else if response.repaint || matches!(event, WindowEvent::Resized(_)) {
             self.window.request_redraw();
         }
@@ -107,7 +107,7 @@ impl Preview {
         self.repaint_at
     }
 
-    fn draw(&mut self) {
+    fn draw(&mut self, draw: impl FnMut(&egui::Context)) {
         let size = self.window.inner_size();
         if size.width == 0 || size.height == 0 || self.window.is_minimized() == Some(true) {
             self.repaint_at = None;
@@ -115,23 +115,7 @@ impl Preview {
         }
         let context = self.state.egui_ctx().clone();
         let input = self.state.take_egui_input(&self.window);
-        let output = context.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.heading("中文输入预览");
-                ui.label("在下方输入中文，或从示例文本中选取并复制内容。");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.draft)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(4),
-                );
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add(egui::Label::new(&self.sample).selectable(true));
-                    });
-            });
-        });
+        let output = context.run(input, draw);
         self.state
             .handle_platform_output(&self.window, output.platform_output);
         let primitives = context.tessellate(output.shapes, output.pixels_per_point);
@@ -147,5 +131,53 @@ impl Preview {
             .viewport_output
             .get(&ViewportId::ROOT)
             .and_then(|viewport| Instant::now().checked_add(viewport.repaint_delay));
+    }
+}
+
+pub struct Preview {
+    panel: Panel,
+    draft: String,
+    sample: String,
+}
+
+impl Preview {
+    pub fn open(event_loop: &ActiveEventLoop) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            panel: Panel::open(
+                event_loop,
+                "桌宠 · 中文输入预览",
+                LogicalSize::new(560, 460),
+            )?,
+            draft: String::new(),
+            sample: (1..=48)
+                .map(|line| format!("{line:02}  桌宠预览文本，可选中并复制。\n"))
+                .collect(),
+        })
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.panel.window
+    }
+
+    pub fn event(&mut self, event: &WindowEvent) {
+        self.panel.event(event, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.heading("中文输入预览");
+                ui.label("在下方输入中文，或从示例文本中选取并复制内容。");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.draft)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(4),
+                );
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.add(egui::Label::new(&self.sample).selectable(true));
+                });
+            });
+        });
+    }
+
+    pub fn repaint_deadline(&mut self) -> Option<Instant> {
+        self.panel.repaint_deadline()
     }
 }

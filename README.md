@@ -10,9 +10,9 @@
 cargo run --locked
 ```
 
-有可用素材包时播放待机，否则显示内置透明色阶样本。单击互动，按住角色可见区域拖动，靠近工作区左右边缘松手可吸附。吸附后单击切换探头，菜单可展开。右键或托盘菜单可预览动作、切换自移动和隐藏状态，也可打开独立的中文输入预览窗口。开启鼠标穿透后，使用系统托盘里的 Desktop Pet ChatGPT 菜单恢复交互或退出。
+有可用素材包时播放待机，否则显示内置透明色阶样本。单击互动，按住角色可见区域拖动，靠近工作区左右边缘松手可吸附。吸附后单击切换探头，菜单可展开。右键和托盘共用菜单，可预览动作、切换音效、自移动和隐藏状态，或打开设置。设置支持实时预览大小和开关、应用并保存、恢复默认和 Windows 登录自启。开启鼠标穿透后，使用系统托盘里的 Desktop Pet ChatGPT 菜单恢复交互或退出。
 
-本地开发时可复制 `desktop-pet.example.toml` 为 `desktop-pet.dev.toml`，在其中设置初始缩放和素材包目录，再用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。普通启动从用户 `config.json` 读取同名字段。素材格式默认 PNG；开发时仍可通过 `DESKTOP_PET_FORMAT` 选择 `rgba8` 或 `bc7`。配置示例和素材验证见 [G-05](docs/G-05-contracts.md#配置分层)。
+本地开发时可复制 `desktop-pet.example.toml` 为 `desktop-pet.dev.toml`，在其中设置初始缩放和素材包目录，再用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。普通启动从用户目录的配置读取偏好。开发配置下的设置只应用到本次运行。素材包目录在设置中保存后，下次启动载入。素材格式默认 PNG；开发时仍可通过 `DESKTOP_PET_FORMAT` 选择 `rgba8` 或 `bc7`。配置示例和素材验证见 [G-05](docs/G-05-contracts.md#配置分层)。
 
 可生成一套自有多动作包体验全部核心行为。生成后在开发配置中将 `pack_path` 指向 `artifacts/validation/p2/fixtures/p2-behavior`。
 

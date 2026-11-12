@@ -1,10 +1,13 @@
+mod assets;
 mod behavior;
 mod config;
 mod launch;
+mod settings;
 
 use std::{
     error::Error,
     io,
+    path::PathBuf,
     sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
@@ -25,9 +28,16 @@ use crate::{
         Variant,
         playback::{PageResult, Playback},
     },
-    platform::windows::{Display, Gesture, WindowInput, physical_size},
+    platform::windows::{
+        Autostart, Display, Gesture, Instance, Sound, WindowInput, physical_size, user_profile,
+    },
     render::{Renderer, placeholder::Placeholder},
-    ui::Preview,
+    ui::{Preview, SettingsWindow},
+};
+
+use self::{
+    assets::{CharacterAssets, LoadedPack},
+    settings::RuntimeSettings,
 };
 
 pub(crate) enum AppEvent {
@@ -36,7 +46,8 @@ pub(crate) enum AppEvent {
     ResumeDisplay,
     Gesture(Gesture),
     PetDeviceLost,
-    PackReady(io::Result<Box<Playback>>),
+    OpenSettings,
+    PackReady(io::Result<Box<LoadedPack>>),
     PageReady(PageResult),
 }
 
@@ -44,6 +55,10 @@ struct App {
     options: launch::LaunchOptions,
     scene: Option<Scene>,
     preview: Option<Preview>,
+    settings: Option<SettingsWindow>,
+    committed: Option<RuntimeSettings>,
+    autostart: Option<Autostart>,
+    instance: Instance,
     proxy: EventLoopProxy<AppEvent>,
     error: Option<Box<dyn Error>>,
 }
@@ -54,6 +69,12 @@ struct Scene {
     window: Arc<Window>,
     sample: Placeholder,
     playback: Option<Playback>,
+    pack_worker: Option<thread::JoinHandle<()>>,
+    pack_path: Option<PathBuf>,
+    pack_status: String,
+    assets: CharacterAssets,
+    sound: Sound,
+    runtime: RuntimeSettings,
     wants_bc7: bool,
     passthrough: bool,
     visible: bool,
@@ -61,9 +82,9 @@ struct Scene {
     pet: Pet,
     display: Option<Display>,
     screen_poll: Instant,
-    side_dip: f64,
     applied_size: Option<PhysicalSize<u32>>,
     reference_geometry: bool,
+    probe_edid: bool,
     unavailable: std::collections::BTreeSet<String>,
     surface_retried: bool,
     device_rebuilt: bool,
@@ -78,12 +99,20 @@ struct PlaybackTrace {
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
-    let options = launch::LaunchOptions::load()?;
+    let profile = user_profile()?;
+    let Some(instance) = Instance::acquire(&profile.root)? else {
+        return Ok(());
+    };
+    let options = launch::LaunchOptions::load(profile.root)?;
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let mut app = App {
         options,
         scene: None,
         preview: None,
+        settings: None,
+        committed: None,
+        autostart: profile.login_registration.then(Autostart::default),
+        instance,
         proxy: event_loop.create_proxy(),
         error: None,
     };
@@ -99,6 +128,7 @@ impl Scene {
         event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<AppEvent>,
         options: &launch::LaunchOptions,
+        instance: &Instance,
     ) -> Result<Self, Box<dyn Error>> {
         let scale = options.startup.scale_percent;
         let attributes = Window::default_attributes()
@@ -117,33 +147,28 @@ impl Scene {
         let geometry = launch::StartupGeometry::Product;
         let window = Arc::new(event_loop.create_window(attributes)?);
         let sample = Placeholder::load()?;
-        let mut input = WindowInput::new(&window, proxy.clone(), options.trace_input)?;
+        let mut input = WindowInput::new(
+            &window,
+            proxy.clone(),
+            options.trace_input,
+            instance.marker(),
+        )?;
         let display = input.display();
-        let probe_until = Instant::now() + Duration::from_millis(120);
-        let probe = display
-            .filter(|_| geometry.probe_edid())
-            .and_then(|display| {
-                let (sender, receiver) = mpsc::sync_channel(1);
-                thread::Builder::new()
-                    .name("monitor-edid".into())
-                    .spawn(move || {
-                        let _ = sender.send(physical_size(display.device));
-                    })
-                    .ok()?;
-                Some(receiver)
-            });
-        let physical_mm = probe.and_then(|probe| {
-            probe
-                .recv_timeout(probe_until.saturating_duration_since(Instant::now()))
-                .ok()
-                .flatten()
-        });
-        let side_dip = initial_side_dip(
-            display.map_or(0, |display| display.bounds.max[1] - display.bounds.min[1]),
-            physical_mm.map(|size| size[1]),
-            window.scale_factor(),
-            scale,
-        );
+        let physical_mm = if options.startup.saved_size.is_none() && geometry.probe_edid() {
+            probe_dimensions(display)
+        } else {
+            None
+        };
+        let runtime = RuntimeSettings {
+            preferences: options.startup.preferences(),
+            size: options.startup.saved_size.unwrap_or_else(|| {
+                crate::core::preferences::SavedSize {
+                    base_dip: base_dip(display, physical_mm, window.scale_factor()),
+                    percent: scale,
+                }
+            }),
+        };
+        let side_dip = runtime.size.dip();
         let applied_size = if geometry.fixed() {
             None
         } else {
@@ -152,7 +177,19 @@ impl Scene {
             Some(size)
         };
         let mut pet = Pet::new(Instant::now());
-        pet.fullscreen = display.is_some_and(|display| input.fullscreen(display));
+        pet.auto_enabled = runtime.preferences.auto_move;
+        pet.fullscreen = runtime.preferences.fullscreen_hide
+            && input.has_tray()
+            && display.is_some_and(|display| input.fullscreen(display));
+        let passthrough = runtime.preferences.passthrough
+            && input.has_tray()
+            && match window.set_cursor_hittest(false) {
+                Ok(()) => true,
+                Err(error) => {
+                    eprintln!("Could not restore mouse passthrough: {error}");
+                    false
+                }
+            };
         eprintln!(
             "Window: DPI scale {:.2}, client size {:?}, EDID mm {physical_mm:?}, initial DIP {side_dip:.2}",
             window.scale_factor(),
@@ -170,37 +207,51 @@ impl Scene {
         ))?;
         window.set_visible(pet.visible());
         window.request_redraw();
-        if let Some(root) = root {
-            let spawn = thread::Builder::new()
+        let mut pack_status = "正在加载素材包".to_owned();
+        let pack_worker = if let Some(root) = root.clone() {
+            match thread::Builder::new()
                 .name("asset-pack".into())
                 .spawn(move || {
                     let frames = proxy.clone();
-                    let pack = Playback::open(&root, variant, move |page| {
+                    let pack = LoadedPack::open(&root, variant, move |page| {
                         frames.send_event(AppEvent::PageReady(page)).is_ok()
                     })
                     .map(Box::new);
                     let _ = proxy.send_event(AppEvent::PackReady(pack));
-                });
-            if let Err(error) = spawn {
-                eprintln!("Could not open asset pack; using placeholder: {error}");
+                }) {
+                Ok(worker) => Some(worker),
+                Err(error) => {
+                    pack_status = format!("无法加载素材包，使用内置占位图。{error}");
+                    eprintln!("{pack_status}");
+                    None
+                }
             }
-        }
+        } else {
+            pack_status = "未找到素材包，正在使用内置占位图。".to_owned();
+            None
+        };
         Ok(Self {
             input,
             renderer: Some(renderer),
             window,
             sample,
             playback: None,
+            pack_worker,
+            pack_path: root,
+            pack_status,
+            assets: Default::default(),
+            sound: Sound::default(),
+            runtime,
             wants_bc7,
-            passthrough: false,
+            passthrough,
             visible: pet.visible(),
             minimized: false,
             pet,
             display,
             screen_poll: Instant::now(),
-            side_dip,
             applied_size,
             reference_geometry: geometry.fixed(),
+            probe_edid: geometry.probe_edid(),
             unavailable: Default::default(),
             surface_retried: false,
             device_rebuilt: false,
@@ -213,23 +264,24 @@ impl Scene {
         })
     }
 
-    fn set_passthrough(&mut self, enabled: bool) {
-        if self.passthrough == enabled || (enabled && !self.input.has_tray()) {
-            return;
+    fn set_passthrough(&mut self, enabled: bool) -> Result<(), String> {
+        if self.passthrough == enabled {
+            return Ok(());
         }
         if enabled {
+            if !self.input.has_tray() {
+                return Err("托盘不可用，无法开启鼠标穿透。".into());
+            }
             self.handle_gesture(Gesture::Cancel);
             self.input.cancel_gesture();
         }
-        match self.window.set_cursor_hittest(!enabled) {
-            Ok(()) => {
-                self.passthrough = enabled;
-                self.window.request_redraw();
-            }
-            Err(error) => eprintln!("Could not change mouse passthrough: {error}"),
-        }
+        self.window
+            .set_cursor_hittest(!enabled)
+            .map_err(|error| error.to_string())?;
+        self.passthrough = enabled;
+        self.window.request_redraw();
+        Ok(())
     }
-
     fn apply_visibility(&mut self, now: Instant) {
         let visible = self.pet.visible();
         if self.visible == visible {
@@ -239,6 +291,9 @@ impl Scene {
         self.pet.reset(now);
         self.play_base();
         self.visible = visible;
+        if !visible {
+            self.sound.stop();
+        }
         if let Some(trace) = &mut self.trace {
             trace.pending = None;
             eprintln!(
@@ -292,6 +347,9 @@ impl Scene {
 
     fn fallback(&mut self, error: impl std::fmt::Display) -> Result<(), String> {
         eprintln!("Asset playback stopped; using placeholder: {error}");
+        self.pack_status = format!("素材播放失败，正在使用内置占位图。{error}");
+        self.sound.replace(None);
+        self.assets = CharacterAssets::default();
         self.playback = None;
         if self.pet.activity != crate::core::Activity::Drag {
             self.pet.finish(Instant::now());
@@ -350,9 +408,9 @@ impl Scene {
 impl App {
     fn open_preview(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(preview) = &self.preview {
-            preview.window.set_minimized(false);
-            preview.window.focus_window();
-            preview.window.request_redraw();
+            preview.window().set_minimized(false);
+            preview.window().focus_window();
+            preview.window().request_redraw();
             return;
         }
         match Preview::open(event_loop) {
@@ -365,8 +423,23 @@ impl App {
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.scene.is_none() {
-            match Scene::open(event_loop, self.proxy.clone(), &self.options) {
-                Ok(scene) => self.scene = Some(scene),
+            match Scene::open(
+                event_loop,
+                self.proxy.clone(),
+                &self.options,
+                &self.instance,
+            ) {
+                Ok(scene) => {
+                    let no_tray = !scene.input.has_tray();
+                    self.committed = Some(scene.runtime);
+                    self.scene = Some(scene);
+                    if no_tray {
+                        self.open_settings(
+                            event_loop,
+                            Some("系统托盘不可用。请从此窗口或角色右键菜单退出。".into()),
+                        );
+                    }
+                }
                 Err(error) => {
                     self.error = Some(error);
                     event_loop.exit();
@@ -381,16 +454,22 @@ impl ApplicationHandler<AppEvent> for App {
         };
         match event {
             AppEvent::TrayMenu(position) => {
-                if scene.menu(event_loop, Some(position)) {
-                    self.open_preview(event_loop);
-                }
+                let command = scene.menu(Some(position));
+                self.handle_menu(event_loop, command);
             }
+            AppEvent::OpenSettings => self.open_settings(event_loop, None),
             AppEvent::TaskbarCreated => {
                 scene.input.add_tray();
                 if !scene.input.has_tray() {
-                    scene.set_passthrough(false);
+                    if let Err(error) = scene.set_passthrough(false) {
+                        eprintln!("Could not restore hit testing: {error}");
+                    }
                     scene.pet.manual_hidden = false;
-                    scene.apply_visibility(Instant::now());
+                    scene.update_display(Instant::now());
+                    self.open_settings(
+                        event_loop,
+                        Some("系统托盘不可用。请从设置窗口退出。".into()),
+                    );
                 }
             }
             AppEvent::ResumeDisplay => {
@@ -403,7 +482,7 @@ impl ApplicationHandler<AppEvent> for App {
                     scene.window.request_redraw();
                 }
                 if let Some(preview) = &self.preview {
-                    preview.window.request_redraw();
+                    preview.window().request_redraw();
                 }
             }
             AppEvent::Gesture(gesture) => scene.handle_gesture(gesture),
@@ -412,20 +491,53 @@ impl ApplicationHandler<AppEvent> for App {
                     playback.accept(result);
                 }
             }
-            AppEvent::PackReady(result) => match result {
-                Ok(mut playback) => {
-                    if scene
-                        .renderer
-                        .as_ref()
-                        .is_some_and(|renderer| !renderer.supports_bc7())
-                    {
-                        playback.use_compatible_format();
+            AppEvent::PackReady(result) => {
+                crate::platform::reap(scene.pack_worker.take());
+                match result {
+                    Ok(pack) => {
+                        let LoadedPack {
+                            mut playback,
+                            assets,
+                            click_wave,
+                        } = *pack;
+                        if scene
+                            .renderer
+                            .as_ref()
+                            .is_some_and(|renderer| !renderer.supports_bc7())
+                        {
+                            playback.use_compatible_format();
+                        }
+                        if scene.trace.is_some() {
+                            use sha2::{Digest, Sha256};
+                            let poster = assets.poster.as_ref().map(|image| {
+                                let mut hash = Sha256::new();
+                                for pixel in &image.pixels {
+                                    hash.update(pixel.to_array());
+                                }
+                                format!("{:x}", hash.finalize())
+                            });
+                            let name = assets
+                                .name
+                                .as_ref()
+                                .map(|name| format!("{:x}", Sha256::digest(name.as_bytes())));
+                            let wave = click_wave
+                                .as_ref()
+                                .map(|wave| format!("{:x}", Sha256::digest(wave)));
+                            eprintln!("P2 resources: {poster:?} {wave:?} {name:?}");
+                        }
+                        scene.playback = Some(playback);
+                        scene.sound.replace(click_wave);
+                        scene.assets = assets;
+                        scene.pack_status = "当前素材包已加载。".into();
+                        scene.play_base();
                     }
-                    scene.playback = Some(*playback);
-                    scene.play_base();
+                    Err(error) => {
+                        eprintln!("Could not open asset pack; using placeholder: {error}");
+                        scene.pack_status = format!("素材包不可用，正在使用内置占位图。{error}");
+                    }
                 }
-                Err(error) => eprintln!("Could not open asset pack; using placeholder: {error}"),
-            },
+                self.refresh_settings_character();
+            }
             AppEvent::PetDeviceLost => {
                 if scene.device_rebuilt {
                     self.error = Some("Pet GPU device was lost again after recovery".into());
@@ -468,8 +580,16 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.window().id() == id)
+        {
+            self.settings_event(event_loop, &event);
+            return;
+        }
         if let Some(preview) = &mut self.preview
-            && preview.window.id() == id
+            && preview.window().id() == id
         {
             if matches!(event, WindowEvent::CloseRequested) {
                 self.preview = None;
@@ -515,8 +635,9 @@ impl ApplicationHandler<AppEvent> for App {
                 state: ElementState::Released,
                 button: MouseButton::Right,
                 ..
-            } if !scene.passthrough && scene.menu(event_loop, None) => {
-                self.open_preview(event_loop);
+            } if !scene.passthrough => {
+                let command = scene.menu(None);
+                self.handle_menu(event_loop, command);
             }
             _ => {}
         }
@@ -524,6 +645,10 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let preview = self.preview.as_mut().and_then(Preview::repaint_deadline);
+        let had_playback = self
+            .scene
+            .as_ref()
+            .is_some_and(|scene| scene.playback.is_some());
         let pet = match self
             .scene
             .as_mut()
@@ -537,7 +662,52 @@ impl ApplicationHandler<AppEvent> for App {
                 return;
             }
         };
-        let deadline = preview.into_iter().chain(pet).min();
+        if had_playback
+            && self
+                .scene
+                .as_ref()
+                .is_some_and(|scene| scene.playback.is_none())
+        {
+            self.refresh_settings_character();
+        }
+        let settings = self
+            .settings
+            .as_mut()
+            .and_then(SettingsWindow::repaint_deadline);
+        let deadline = preview.into_iter().chain(settings).chain(pet).min();
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
+}
+
+impl Drop for Scene {
+    fn drop(&mut self) {
+        self.sound.stop();
+        drop(self.playback.take());
+        crate::platform::reap(self.pack_worker.take());
+    }
+}
+
+fn probe_dimensions(display: Option<Display>) -> Option<[u16; 2]> {
+    let display = display?;
+    let until = Instant::now() + Duration::from_millis(120);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("monitor-edid".into())
+        .spawn(move || {
+            let _ = sender.send(physical_size(display.device));
+        })
+        .ok()?;
+    receiver
+        .recv_timeout(until.saturating_duration_since(Instant::now()))
+        .ok()
+        .flatten()
+}
+
+fn base_dip(display: Option<Display>, physical_mm: Option<[u16; 2]>, dpi_scale: f64) -> f64 {
+    initial_side_dip(
+        display.map_or(0, |display| display.bounds.max[1] - display.bounds.min[1]),
+        physical_mm.map(|size| size[1]),
+        dpi_scale,
+        100,
+    )
 }

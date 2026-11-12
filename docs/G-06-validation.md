@@ -43,6 +43,8 @@ CI：Windows locked build、fmt、clippy、现有纯逻辑/契约测试；自有
 
 P2-01 用 [Windows 行为脚本](../scripts/validation/p2/check-windows.py) 在交互桌面运行自有合成包，记录动作、可见性、命中区域和启动尺寸。脚本将输入发往测试进程窗口，使用自建的全屏测试窗。阶段记录附双屏 EDID 和 DIP 回退数据。
 
+P2-02 用 [设置验收脚本](../scripts/validation/p2/check-settings.py) 在独立用户目录下检查单实例、实时预览与撤销、保存和恢复默认、穿透重启及托盘撤销、坏配置与文件占用，以及两套素材的图片、音效和通用名。自启注册表读写使用隔离的 HKCU 子键验证。
+
 ## 3. 性能实验与预算
 
 | 项目 | 初始目标/口径 | 冻结节点 |

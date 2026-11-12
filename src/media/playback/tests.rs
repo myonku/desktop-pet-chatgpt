@@ -22,7 +22,8 @@ fn timeline_skips_late_frames_and_wraps_at_total_duration() {
 fn cancelled_generation_rejects_old_completion_and_releases_request_slot() {
     let (requests, _receiver) = mpsc::sync_channel(1);
     let mut source = FrameSource {
-        requests,
+        requests: Some(requests),
+        worker: None,
         generation: Arc::new(AtomicU64::new(0)),
         id: 42,
         pending: Some(0),
@@ -51,7 +52,8 @@ fn cancelled_generation_rejects_old_completion_and_releases_request_slot() {
 fn page_source_rejects_wrong_instance_without_releasing_current_request() {
     let (requests, _receiver) = mpsc::sync_channel(1);
     let mut source = FrameSource {
-        requests,
+        requests: Some(requests),
+        worker: None,
         generation: Arc::new(AtomicU64::new(0)),
         id: 42,
         pending: Some(0),
@@ -86,7 +88,8 @@ fn test_player() -> (Playback, mpsc::Receiver<Request>) {
     };
     let mut player = Playback {
         source: FrameSource {
-            requests,
+            requests: Some(requests),
+            worker: None,
             generation: Arc::new(AtomicU64::new(0)),
             id: 42,
             pending: None,
