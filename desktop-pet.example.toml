@@ -1,8 +1,20 @@
-# 复制为 desktop-pet.dev.toml，再用以下命令启动：
-# cargo run --locked -- --dev-config desktop-pet.dev.toml
+# 产品配置放在 %LOCALAPPDATA%/DesktopPetChatGPT/config.toml。
+# 开发配置放在启动工作目录的 desktop-pet.dev.toml。
+# 在仓库根目录运行 cargo run --locked --features development。
+schema_version = 1
 
 # 相对显示器物理尺寸推导的基准，取值 50–200。探测不可用时基准为 256×256 DIP。
 initial_scale_percent = 70
 
 # 含 manifest.json 的包目录。相对路径以本配置文件所在目录为准。
 # pack_path = "artifacts/validation/p2/fixtures/p2-behavior"
+
+# [preferences]
+# auto_move = true
+# sound = true
+
+# 以下设置只用于开发构建读取的 desktop-pet.dev.toml。
+# [development]
+# format = "png"
+# trace_playback = false
+# trace_input = false

@@ -6,7 +6,8 @@ rust-version = "1.99.1"
 default-run = "desktop-pet-chatgpt"
 
 [features]
-p1b-reference = []
+development = []
+p1b-reference = ["development"]
 
 [dependencies]
 bcdec_rs = "=0.2.0"

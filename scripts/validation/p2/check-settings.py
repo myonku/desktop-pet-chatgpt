@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import subprocess
 import time
+import tomllib
 
 native = runpy.run_path(str(Path(__file__).with_name("check-windows.py")))
 U, K = native["U"], native["K"]
@@ -27,6 +29,8 @@ U.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT,
                                  w.UINT, c.POINTER(c.c_size_t)]
 U.SendMessageTimeoutW.restype = w.LPARAM
 U.GetWindowLongW.argtypes = [w.HWND, c.c_int]
+U.GetDlgItem.argtypes = [w.HWND, c.c_int]
+U.GetDlgItem.restype = w.HWND
 K.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, w.LPVOID, w.DWORD, w.DWORD, w.HANDLE]
 K.CreateFileW.restype = w.HANDLE
 K.CloseHandle.argtypes = [w.HANDLE]
@@ -37,14 +41,20 @@ RESOURCE_TRACE = re.compile(r'^P2 resources: Some\("([0-9a-f]+)"\) Some\("([0-9a
 class Profile:
     def __init__(self, root):
         self.root = root
-        self.config = root / "DesktopPetChatGPT/config.json"
+        self.config = root / "DesktopPetChatGPT/config.toml"
         self.config.parent.mkdir(parents=True)
 
     def write(self, value):
-        self.config.write_text(json.dumps(value, ensure_ascii=False) + "\n", encoding="utf-8")
+        lines = [f"{key} = {json.dumps(field, ensure_ascii=False)}"
+                 for key, field in value.items() if not isinstance(field, dict)]
+        for table, fields in value.items():
+            if isinstance(fields, dict):
+                lines += [f"[{table}]", *(f"{key} = {json.dumps(field, ensure_ascii=False)}"
+                                          for key, field in fields.items())]
+        self.config.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def read(self):
-        return json.loads(self.config.read_text(encoding="utf-8"))
+        return tomllib.loads(self.config.read_text(encoding="utf-8"))
 
 
 class Pet:
@@ -66,7 +76,7 @@ class Pet:
         if via_menu:
             menu(self.hwnd, "S")
         else:
-            duplicate = subprocess.run([self.exe], env=launch_env(self.profile),
+            duplicate = subprocess.run([self.exe], cwd=self.profile.root, env=launch_env(self.profile),
                                        capture_output=True, timeout=10)
             require(duplicate.returncode == 0, "second launch exits without creating a pet")
         hwnd = self.settings()
@@ -134,15 +144,28 @@ def launch_env(profile):
                 DESKTOP_PET_FORMAT="png", DESKTOP_PET_REFERENCE_CLIENT=f"auto,{b.left + 210},{b.top + 160}")
 
 
-@contextmanager
-def pet_process(exe, profile, log, expected_asset=True, extra=()):
+def launch(exe, profile, log, cwd=None):
     with log.open("wb") as stream:
-        proc = subprocess.Popen([exe, *extra], env=launch_env(profile), stdout=stream, stderr=subprocess.STDOUT)
+        return subprocess.Popen([exe], cwd=cwd or profile.root, env=launch_env(profile),
+                                stdout=stream, stderr=subprocess.STDOUT)
+
+
+def answer_config_dialog(proc, choice):
+    dialog = wait(lambda: find_window(proc.pid, "桌宠配置无法加载"), "startup configuration dialog")
+    button = U.GetDlgItem(dialog, choice)
+    require(button and U.PostMessageW(dialog, 0x111, choice, button), "answer startup dialog")
+
+
+@contextmanager
+def pet_process(exe, profile, log, cwd=None, answer=None):
+    proc = launch(exe, profile, log, cwd)
     pet = None
     try:
+        if answer is not None:
+            answer_config_dialog(proc, answer)
         hwnd = wait(lambda: find_window(proc.pid), "pet window", timeout=12)
         pet = Pet(proc, log, hwnd, exe, profile)
-        pet.until("First asset frame presented" if expected_asset else "First frame presented")
+        pet.until("First asset frame presented")
         yield pet
     finally:
         if proc.poll() is None:
@@ -223,28 +246,40 @@ def settings_roundtrip(exe, profile, dawn, dusk, output):
         pet.control(hwnd, "exit")
         wait(lambda: pet.proc.poll() is not None, "exit via settings")
 
-    with pet_process(exe, profile, output / "reset.log", expected_asset=False) as pet:
+    with pet_process(exe, profile, output / "reset.log") as pet:
         require("initial DIP 264.00" not in pet.text(), "reset left the old saved size active")
     return {"dawn": dawn_resources, "dusk": dusk_resources,
             "saved_pixels": preview_side, "initial_saved_pixels": original_side}
 
 
 def recovery(exe, profile, output):
-    corrupt = b'{"schema_version": 99}\n'
+    corrupt = b"schema_version = 99\n"
     profile.config.write_bytes(corrupt)
-    with pet_process(exe, profile, output / "bad-config.log", expected_asset=False) as pet:
+    cancelled = launch(exe, profile, output / "cancel-config.log")
+    try:
+        answer_config_dialog(cancelled, 7)  # IDNO
+        require(cancelled.wait(timeout=5) != 0, "declining config repair must stop startup")
+    finally:
+        if cancelled.poll() is None:
+            cancelled.terminate()
+            cancelled.wait(timeout=5)
+    require(profile.config.read_bytes() == corrupt, "declining config repair modified the file")
+    require(not (profile.config.parent / "backups").exists(), "declining config repair created a backup")
+    with pet_process(exe, profile, output / "bad-config.log", answer=6) as pet:  # IDYES
         pet.until("Could not load configuration")
-        hwnd = pet.open_settings()
-        require(profile.config.read_bytes() == corrupt, "bad file overwritten at startup")
-        pet.control(hwnd, "reset")
         backups = profile.config.parent / "backups"
-        backed_up = wait(lambda: list(backups.glob("config-invalid-*.json")), "invalid original backup")
-        wait(lambda: profile.config.read_bytes() != corrupt, "repaired product config")
+        backed_up = list(backups.glob("config-invalid-*.toml"))
+        require(len(backed_up) == 1, "one invalid original backup")
         require(backed_up[0].read_bytes() == corrupt and profile.read()["schema_version"] == 1,
                 "explicit repair must preserve exact original bytes")
 
+    profile.write({"pack_path": "missing-pack"})
+    with pet_process(exe, profile, output / "default-pack.log") as pet:
+        pet.until("指定素材包")
+        pet.until("Asset playback: dawn")
+
     original = profile.config.read_bytes()
-    with pet_process(exe, profile, output / "locked-config.log", expected_asset=False) as pet:
+    with pet_process(exe, profile, output / "locked-config.log") as pet:
         hwnd = pet.open_settings()
         handle = K.CreateFileW(str(profile.config), 0x80000000, 3, None, 3, 0, None)
         require(handle not in (None, c.c_void_p(-1).value), "lock destination without delete sharing")
@@ -263,15 +298,17 @@ def recovery(exe, profile, output):
 def dev_isolation(exe, profile, dawn, output):
     profile.write({"schema_version": 1, "saved_size": {"base_dip": 240, "percent": 110}})
     original = profile.config.read_bytes()
-    dev = output / "isolated.toml"
+    dev = profile.root / "desktop-pet.dev.toml"
     dev.write_text(f"initial_scale_percent = 100\npack_path = {json.dumps(dawn.as_posix(), ensure_ascii=False)}\n",
                    encoding="utf-8")
-    with pet_process(exe, profile, output / "dev.log", extra=("--dev-config", dev)) as pet:
-        require(pet.side() != round(264 * U.GetDpiForWindow(pet.hwnd) / 96), "TOML overrides saved size")
+    development = dev.read_bytes()
+    with pet_process(exe, profile, output / "dev.log") as pet:
+        require("initial DIP 264.00" not in pet.text(), "development TOML has priority over saved size")
         hwnd = pet.open_settings()
         pet.control(hwnd, "sound")
         pet.control(hwnd, "save")
         require(profile.config.read_bytes() == original, "development Apply wrote product preferences")
+        require(dev.read_bytes() == development, "development Apply wrote development preferences")
 
 
 def main():
@@ -284,12 +321,15 @@ def main():
     output.mkdir(parents=True, exist_ok=False)
     dawn, dusk = (args.packs.resolve() / name for name in ("dawn", "dusk"))
     require(all((pack / "manifest.json").is_file() for pack in (dawn, dusk)), "missing P1 asset fixtures")
-    exe = args.exe.resolve()
+    exe = output / args.exe.name
+    shutil.copy2(args.exe, exe)
+    shutil.copytree(dawn, output / "resources/default")
     report = settings_roundtrip(exe, Profile(output / "profile"), dawn, dusk, output)
     recovery(exe, Profile(output / "recovery-profile"), output)
     dev_isolation(exe, Profile(output / "dev-profile"), dawn, output)
     report["checks"] = ["single instance", "preview/apply/restart", "sound independence",
-                        "tray passthrough", "resource swap", "reset/recovery", "locked config", "development isolation"]
+                        "tray passthrough", "resource swap", "reset/recovery", "default pack fallback",
+                        "locked config", "development isolation"]
     (output / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
 

@@ -63,7 +63,7 @@ $env:PYTHONPATH = Join-Path $PWD 'artifacts/validation/p2/tools'
 python -m pip install --target "$env:PYTHONPATH" ispc_texcomp==1.0.1 texture2ddecoder==1.0.6
 python scripts/validation/p2/assemble-representative.py --legacy-manifest 'assets/source/white-dragon/白龙桌宠素材/素材清单.json' --ffmpeg '.legacy-v0.5.1/tools/ffmpeg.exe' --output "$fixtures/white-dragon-p2-local"
 target/release/validate-pack.exe --distribution "$fixtures/white-dragon-p2-local"
-python scripts/validation/p1/measure-p1b-playback.py --exe target/release/desktop-pet-chatgpt.exe --pack "$fixtures/white-dragon-p2-local" --output "$run/representative" --formats png --rounds 1 --warmup 2 --seconds 3
+python scripts/validation/p1/measure-p1b-playback.py --exe target/reference/release/desktop-pet-chatgpt.exe --pack "$fixtures/white-dragon-p2-local" --output "$run/representative" --formats png --rounds 1 --warmup 2 --seconds 3
 ```
 
 ## 本地结果

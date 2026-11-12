@@ -1,100 +1,68 @@
-use std::{
-    env, fs, io,
-    path::{Path, PathBuf},
-};
-
-use serde::Deserialize;
+use std::{env, io, path::PathBuf};
 
 use crate::{
-    core::preferences::{INITIAL_SCALE, Preferences, SavedSize},
+    platform::windows::{confirm_config_reset, show_config_error},
     storage::{Config, ConfigStore},
 };
 
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DevConfig {
-    schema_version: Option<u32>,
-    initial_scale_percent: Option<u16>,
-    pack_path: Option<PathBuf>,
-}
-
 pub(super) struct StartupConfig {
-    pub product: Config,
+    pub config: Config,
     pub store: ConfigStore,
     pub development: bool,
-    pub scale_percent: u16,
-    pub saved_size: Option<SavedSize>,
     pub pack_path: Option<PathBuf>,
 }
 
 impl StartupConfig {
-    pub fn load(root: PathBuf, dev_path: Option<&Path>) -> io::Result<Self> {
-        let (store, product) = ConfigStore::load(root);
-        if let Some(error) = store.problem() {
-            eprintln!("Could not load configuration: {error}");
+    pub fn load(root: PathBuf) -> io::Result<Self> {
+        if cfg!(feature = "development") {
+            let (store, config) =
+                ConfigStore::load(env::current_dir()?.join("desktop-pet.dev.toml"), true);
+            if !store.is_missing() {
+                return Self::from_store(store, config, true);
+            }
         }
-        let dev = if let Some(path) = dev_path {
-            let load = || {
-                let text = fs::read_to_string(path)?;
-                let mut dev: DevConfig =
-                    toml_edit::de::from_str(text.trim_start_matches('\u{feff}'))
-                        .map_err(io::Error::other)?;
-                if dev.schema_version.is_some_and(|version| version != 1) {
-                    return Err(io::Error::other("expected schema_version = 1"));
-                }
-                let mut config = Config::default();
-                config.initial_scale_percent = dev.initial_scale_percent;
-                config.pack_path.clone_from(&dev.pack_path);
-                config.validate()?;
-                dev.pack_path = dev
-                    .pack_path
-                    .map(|pack| resolve_pack(path.parent().unwrap_or(Path::new("")), &pack));
-                Ok(dev)
-            };
-            load().map_err(|error| {
-                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
-            })?
-        } else {
-            DevConfig::default()
-        };
-        let scale_percent = dev
-            .initial_scale_percent
-            .or(product.initial_scale_percent)
-            .unwrap_or(INITIAL_SCALE);
-        let saved_size = if dev.initial_scale_percent.is_some() {
-            None
-        } else {
-            product.saved_size
-        };
-        let pack_path = match dev.pack_path.or_else(|| {
-            product
-                .pack_path
-                .as_ref()
-                .map(|path| resolve_pack(store.root(), path))
-        }) {
-            Some(pack) => Some(pack),
+        let (store, config) = ConfigStore::load(root.join("config.toml"), false);
+        Self::from_store(store, config, false)
+    }
+
+    fn from_store(
+        mut store: ConfigStore,
+        config: Option<Config>,
+        development: bool,
+    ) -> io::Result<Self> {
+        let config = match config {
+            Some(config) => config,
             None => {
-                let default = env::current_exe()?
-                    .with_file_name("resources")
-                    .join("default");
-                default.exists().then_some(default)
+                let problem = store.problem().unwrap();
+                eprintln!("Could not load configuration: {problem}");
+                if !confirm_config_reset(problem) {
+                    return Err(io::Error::other("用户取消了配置恢复，启动已停止。"));
+                }
+                let defaults = Config::default();
+                match store.save(&defaults, true) {
+                    Ok(backup) => {
+                        if let Some(backup) = backup {
+                            eprintln!("Invalid configuration backed up to {}", backup.display());
+                        }
+                    }
+                    Err(error) => {
+                        let message = format!("无法写入默认配置，启动已停止。\n\n{error}");
+                        show_config_error(&message);
+                        return Err(io::Error::other(message));
+                    }
+                }
+                defaults
             }
         };
+        let pack_path = config
+            .pack_path
+            .as_ref()
+            .map(|path| store.root().join(path));
         Ok(Self {
-            product,
+            config,
             store,
-            development: dev_path.is_some(),
-            scale_percent,
-            saved_size,
+            development,
             pack_path,
         })
     }
-
-    pub fn preferences(&self) -> Preferences {
-        self.product.preferences
-    }
-}
-
-fn resolve_pack(base: &Path, path: &Path) -> PathBuf {
-    base.join(path)
 }

@@ -97,12 +97,13 @@ class GpuCounters:
 
 def measure(exe, config, variant, warmup, duration, log, process_factory, page_sizes, reference,
             gpu_factory):
-    env = dict(os.environ, DESKTOP_PET_FORMAT=variant, DESKTOP_PET_TRACE="1")
+    env = dict(os.environ, DESKTOP_PET_FORMAT=variant, DESKTOP_PET_TRACE="1",
+               LOCALAPPDATA=str(config.parent.resolve() / "profile"))
     if variant == "ffmpeg":
         env.update(DESKTOP_PET_REFERENCE_FFMPEG=str(reference[0].resolve()),
                    DESKTOP_PET_REFERENCE_VIDEO=str(reference[1].resolve()))
     started = time.perf_counter()
-    with subprocess.Popen([str(exe.resolve()), "--dev-config", str(config.resolve())],
+    with subprocess.Popen([str(exe.resolve())], cwd=config.parent,
                           env=env, stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE, text=True, encoding="utf-8",
                           errors="replace") as child:

@@ -30,6 +30,7 @@ struct Request {
     generation: u64,
     index: usize,
     variant: Variant,
+    startup_reply: Option<SyncSender<PageResult>>,
 }
 
 struct FrameSource {
@@ -74,7 +75,11 @@ impl FrameSource {
                         index: request.index,
                         pixels,
                     };
-                    if !deliver(result) {
+                    let delivered = match request.startup_reply {
+                        Some(reply) => reply.send(result).is_ok(),
+                        None => deliver(result),
+                    };
+                    if !delivered {
                         break;
                     }
                 }
@@ -90,7 +95,12 @@ impl FrameSource {
         })
     }
 
-    fn request(&mut self, index: usize, variant: Variant) -> io::Result<()> {
+    fn request(
+        &mut self,
+        index: usize,
+        variant: Variant,
+        startup_reply: Option<SyncSender<PageResult>>,
+    ) -> io::Result<()> {
         if self.pending.is_none() {
             let generation = self.generation.load(Ordering::Relaxed);
             self.requests
@@ -100,6 +110,7 @@ impl FrameSource {
                     generation,
                     index,
                     variant,
+                    startup_reply,
                 })
                 .map_err(io::Error::other)?;
             self.pending = Some(generation);
@@ -298,6 +309,21 @@ impl Playback {
             .map(|(_, action)| action.id.as_str())
     }
 
+    pub fn load_first_frame(&mut self) -> io::Result<()> {
+        let (page, _) = self.actions[self.base].frames[0];
+        let (send, receive) = mpsc::sync_channel(1);
+        self.source.request(page, self.variant, Some(send))?;
+        let result = receive
+            .recv_timeout(PAGE_TIMEOUT)
+            .map_err(io::Error::other)?;
+        let (_, pixels) = self.source.accept(result).unwrap();
+        self.ready = Some((page, pixels?));
+        self.tick(Instant::now())?;
+        // The animation clock starts when the event loop begins playback.
+        self.epoch = None;
+        Ok(())
+    }
+
     pub fn contains(&self, id: &str) -> bool {
         self.actions.iter().any(|action| action.id == id)
     }
@@ -438,7 +464,7 @@ impl Playback {
                     return Err(error);
                 }
                 self.ready = None;
-                self.source.request(page, self.variant)?;
+                self.source.request(page, self.variant, None)?;
                 return Ok(PlaybackTick {
                     changed: false,
                     deadline: Some(deadline),
@@ -479,7 +505,7 @@ impl Playback {
                     .as_ref()
                     .is_none_or(|(index, _)| *index != next_page)
             {
-                self.source.request(next_page, self.variant)?;
+                self.source.request(next_page, self.variant, None)?;
             }
         }
         Ok(PlaybackTick {

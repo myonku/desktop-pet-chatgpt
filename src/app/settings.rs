@@ -93,7 +93,7 @@ impl App {
             scale_percent: scene.runtime.size.percent,
             autostart: autostart.unwrap_or(false),
             pack_path: startup
-                .product
+                .config
                 .pack_path
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
@@ -107,7 +107,6 @@ impl App {
         ) {
             Ok(mut settings) => {
                 settings.notice = notice;
-                settings.problem = startup.store.problem().map(str::to_owned);
                 settings.saved_autostart = autostart;
                 self.settings = Some(settings);
                 self.refresh_settings_character();
@@ -169,12 +168,7 @@ impl App {
             SettingsAction::Save => self.save_draft(&draft),
             SettingsAction::Reset => self.reset_settings(),
             SettingsAction::RevealPack => {
-                let path = match &self.scene.as_ref().unwrap().pack_path {
-                    Some(path) => Ok(path.clone()),
-                    None => env::current_exe().map(|exe| exe.with_file_name("resources")),
-                };
-                path.and_then(|path| reveal_directory(&path))
-                    .map_err(|error| error.to_string())
+                reveal_directory(&scene.pack_path).map_err(|error| error.to_string())
             }
             SettingsAction::PlaySound => {
                 let scene = self.scene.as_mut().unwrap();
@@ -215,7 +209,7 @@ impl App {
     fn save_draft(&mut self, draft: &SettingsDraft) -> Result<(), String> {
         self.preview_settings(draft)?;
         let runtime = self.scene.as_ref().unwrap().runtime;
-        let mut config = self.options.startup.product.clone();
+        let mut config = self.options.startup.config.clone();
         if runtime.size != self.committed.unwrap().size {
             config.saved_size = Some(runtime.size);
         }
@@ -262,7 +256,6 @@ impl App {
                 autostart: false,
                 pack_path: String::new(),
             };
-            settings.problem = self.options.startup.store.problem().map(str::to_owned);
             settings.saved_autostart = settings.saved_autostart.map(|_| false);
         }
         let notice = if self.options.startup.development {
@@ -323,7 +316,7 @@ impl App {
         })();
         match result {
             Ok(backup) => {
-                self.options.startup.product = config;
+                self.options.startup.config = config;
                 self.committed = Some(runtime);
                 Ok(backup)
             }
@@ -358,7 +351,7 @@ impl App {
                 } else {
                     let mut runtime = self.committed.unwrap();
                     toggle(&mut runtime.preferences, command);
-                    let mut config = self.options.startup.product.clone();
+                    let mut config = self.options.startup.config.clone();
                     config.preferences = runtime.preferences;
                     if let Err(error) = self.commit_settings(config, runtime, None, false) {
                         self.open_settings(event_loop, Some(format!("未保存：{error}")));

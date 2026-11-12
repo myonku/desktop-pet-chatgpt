@@ -44,7 +44,7 @@ fn cancelled_generation_rejects_old_completion_and_releases_request_slot() {
     };
     assert!(source.accept(result).is_none());
     assert_eq!(source.pending, None);
-    source.request(0, Variant::Png).unwrap();
+    source.request(0, Variant::Png, None).unwrap();
     assert_eq!(source.pending, Some(1));
 }
 

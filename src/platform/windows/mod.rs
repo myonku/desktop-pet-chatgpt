@@ -36,7 +36,9 @@ mod preferences;
 mod session;
 pub use display::{Display, physical_size};
 pub use preferences::{Autostart, Sound, startup_command};
-pub use session::{Instance, local_path, reveal_directory, user_profile};
+pub use session::{
+    Instance, confirm_config_reset, local_path, reveal_directory, show_config_error, user_profile,
+};
 
 #[derive(Debug)]
 pub enum Gesture {

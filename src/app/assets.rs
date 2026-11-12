@@ -1,4 +1,10 @@
-use std::{io, path::Path, sync::Arc};
+use std::{
+    env, io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use winit::event_loop::EventLoopProxy;
 
 use crate::{
     media::{
@@ -6,7 +12,58 @@ use crate::{
         playback::{PageResult, Playback},
     },
     platform::windows::local_path,
+    render::Renderer,
 };
+
+use super::AppEvent;
+
+pub(super) fn load_startup_pack(
+    configured: Option<&Path>,
+    variant: Variant,
+    proxy: &EventLoopProxy<AppEvent>,
+    renderer: &mut Renderer,
+) -> io::Result<(PathBuf, LoadedPack, String)> {
+    let default = env::current_exe()?
+        .with_file_name("resources")
+        .join("default");
+    let mut open = |root: &Path, variant| -> io::Result<LoadedPack> {
+        let frames = proxy.clone();
+        let pack = LoadedPack::open(root, variant, move |page| {
+            frames.send_event(AppEvent::PageReady(page)).is_ok()
+        })?;
+        let (key, frame) = pack.playback.frame().unwrap();
+        renderer.show(Some(key), frame).map_err(io::Error::other)?;
+        Ok(pack)
+    };
+    let mut configured_failure = String::new();
+    if let Some(path) = configured {
+        match open(path, variant) {
+            Ok(pack) => return Ok((path.to_owned(), pack, "当前素材包已加载。".into())),
+            Err(error) => {
+                configured_failure = format!("指定素材包 {} 加载失败：{error}\n", path.display());
+                eprint!("{configured_failure}");
+            }
+        }
+    }
+    #[cfg(feature = "p1b-reference")]
+    let variant = if variant == Variant::Ffmpeg {
+        Variant::Png
+    } else {
+        variant
+    };
+    let pack = open(&default, variant).map_err(|error| {
+        io::Error::other(format!(
+            "{configured_failure}默认素材包 {} 加载失败：{error}\n没有可用素材包，启动已停止。",
+            default.display()
+        ))
+    })?;
+    let status = if configured_failure.is_empty() {
+        "当前素材包已加载。"
+    } else {
+        "指定素材包无法加载，已加载默认素材包。"
+    };
+    Ok((default, pack, status.into()))
+}
 
 pub(crate) struct LoadedPack {
     pub playback: Playback,
@@ -29,7 +86,8 @@ impl LoadedPack {
         let path = local_path(root)?;
         let path = local_path(&path.canonicalize()?)?;
         let pack = Arc::new(Pack::open(&path)?);
-        let playback = Playback::open(pack.clone(), variant, deliver)?;
+        let mut playback = Playback::open(pack.clone(), variant, deliver)?;
+        playback.load_first_frame()?;
         let resource = |key| match pack.load_resource(key, None) {
             Ok(value) => value,
             Err(error) => {
@@ -59,5 +117,27 @@ impl LoadedPack {
             assets: CharacterAssets { name, poster },
             click_wave,
         })
+    }
+
+    pub fn trace_resources(&self) {
+        use sha2::{Digest, Sha256};
+
+        let poster = self.assets.poster.as_ref().map(|image| {
+            let mut hash = Sha256::new();
+            for pixel in &image.pixels {
+                hash.update(pixel.to_array());
+            }
+            format!("{:x}", hash.finalize())
+        });
+        let name = self
+            .assets
+            .name
+            .as_ref()
+            .map(|name| format!("{:x}", Sha256::digest(name.as_bytes())));
+        let wave = self
+            .click_wave
+            .as_ref()
+            .map(|wave| format!("{:x}", Sha256::digest(wave)));
+        eprintln!("P2 resources: {poster:?} {wave:?} {name:?}");
     }
 }

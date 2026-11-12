@@ -193,27 +193,28 @@ def fullscreen(monitor):
 
 
 class Run:
-    def __init__(self, output, exe, pack, name, monitor, mode="auto", expect_asset=True):
+    def __init__(self, output, exe, pack, name, monitor, mode="auto"):
         self.log = output / f"{name}.log"
-        config = output / f"{name}.toml"
+        self.cwd = output / "startup-configs" / name
+        self.cwd.mkdir(parents=True)
+        config = self.cwd / "desktop-pet.dev.toml"
         config.write_text(f"initial_scale_percent = 70\npack_path = {json.dumps(pack.as_posix(), ensure_ascii=False)}\n",
                           encoding="utf-8")
         env = dict(os.environ, DESKTOP_PET_TRACE="1", DESKTOP_PET_FORMAT="png",
                    LOCALAPPDATA=str(output.resolve() / "profile"))
         b = monitor.work
         env["DESKTOP_PET_REFERENCE_CLIENT"] = f"{mode},{b.left + 300},{b.top + 200}"
-        self.expect_asset = expect_asset
         self.proc = None
         self.hwnd = None
-        self.exe, self.config, self.env = exe, config, env
+        self.exe, self.env = exe, env
 
     def __enter__(self):
         with self.log.open("wb") as log:
-            self.proc = subprocess.Popen([self.exe, "--dev-config", self.config],
-                                         env=self.env, stdout=log, stderr=subprocess.STDOUT)
+            self.proc = subprocess.Popen([self.exe], cwd=self.cwd, env=self.env,
+                                         stdout=log, stderr=subprocess.STDOUT)
         try:
             self.hwnd = wait(lambda: find_window(self.proc.pid), f"window for {self.log.name}")
-            self.until("First asset frame presented" if self.expect_asset else "First frame presented")
+            self.until("First asset frame presented")
         except BaseException:
             self.close()
             raise
@@ -250,9 +251,13 @@ def check_size(run, monitor, forced_dip=False):
     require(match, "startup size trace")
     _, width_mm, height_mm, dip = match.groups()
     dpi = U.GetDpiForWindow(run.hwnd)
-    left, top, right, bottom = bounds(run.hwnd)
     expected = round(float(dip) * dpi / 96)
-    require(right - left == bottom - top == expected, f"startup size {bounds(run.hwnd)} expected {expected}")
+
+    def sized():
+        left, top, right, bottom = bounds(run.hwnd)
+        return (left, top, right, bottom) if right - left == bottom - top == expected else None
+
+    left, _, right, _ = wait(sized, f"startup size settles at {expected}x{expected}")
     require(get_monitor(U.MonitorFromWindow(run.hwnd, 2)).device == monitor.device, "startup target monitor")
     if forced_dip:
         require(height_mm is None and float(dip) == 179.2, "DIP fallback must use 256 * 70%")
@@ -390,7 +395,9 @@ def main():
     primary, *others = displays()
     secondary = next(iter(others), None)
     pack = args.fixtures.resolve() / "p2-behavior"
-    kwargs = (args.output, args.exe.resolve())
+    exe = args.output.resolve() / args.exe.name
+    shutil.copy2(args.exe, exe)
+    kwargs = (args.output, exe)
     report = {"display_measurements": [], "checks": []}
     with Run(*kwargs, pack, "behavior", primary) as run:
         report["display_measurements"].append(check_size(run, primary))
@@ -418,10 +425,13 @@ def main():
         run.action("idle", mark)
         report["checks"].append("corrupt later page falls back to idle")
     (broken / "idle-0.png").write_bytes(b"intentionally invalid")
-    with Run(*kwargs, broken, "broken-idle", primary, expect_asset=False) as run:
-        run.until("Asset playback stopped; using placeholder")
-        require("First asset frame presented" not in run.text(), "corrupt idle was presented")
-        report["checks"].append("corrupt required idle falls back to placeholder")
+    run = Run(*kwargs, broken, "broken-idle", primary)
+    with run.log.open("wb") as log:
+        result = subprocess.run([run.exe], cwd=run.cwd, env=run.env,
+                                stdout=log, stderr=subprocess.STDOUT, timeout=12)
+    require(result.returncode != 0 and "没有可用素材包" in run.text()
+            and "First frame presented" not in run.text(), "invalid startup packs must stop before presentation")
+    report["checks"].append("corrupt required first page with no default pack stops startup")
     (args.output / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
 

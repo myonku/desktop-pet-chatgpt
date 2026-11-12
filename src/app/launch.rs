@@ -1,4 +1,6 @@
-use std::{env, io, path::PathBuf};
+#[cfg(feature = "development")]
+use std::env;
+use std::{io, path::PathBuf};
 #[cfg(feature = "p1b-reference")]
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
@@ -6,6 +8,8 @@ use winit::{
 };
 
 use crate::media::Variant;
+#[cfg(feature = "development")]
+use crate::storage::AssetFormat;
 
 use super::config::StartupConfig;
 
@@ -18,34 +22,52 @@ pub(super) struct LaunchOptions {
 
 impl LaunchOptions {
     pub fn load(root: PathBuf) -> io::Result<Self> {
-        let mut args = env::args_os().skip(1);
-        let dev_path = match (args.next(), args.next(), args.next()) {
-            (None, None, None) => None,
-            (Some(flag), Some(path), None) if flag == "--dev-config" => Some(PathBuf::from(path)),
-            _ => {
-                return Err(io::Error::other(
-                    "usage: desktop-pet-chatgpt [--dev-config <path>]",
-                ));
-            }
+        if std::env::args_os().nth(1).is_some() {
+            return Err(io::Error::other("usage: desktop-pet-chatgpt"));
+        }
+        let startup = StartupConfig::load(root)?;
+        #[cfg(feature = "development")]
+        let (variant, trace_playback, trace_input) = {
+            let dev = startup.config.development.as_ref();
+            let variant = match dev.and_then(|dev| dev.format.as_ref()) {
+                Some(AssetFormat::Png) => Variant::Png,
+                Some(AssetFormat::Rgba8) => Variant::Rgba8,
+                Some(AssetFormat::Bc7) => Variant::Bc7,
+                #[cfg(feature = "p1b-reference")]
+                Some(AssetFormat::Ffmpeg) => Variant::Ffmpeg,
+                None => development_format(),
+            };
+            (
+                variant,
+                dev.and_then(|dev| dev.trace_playback)
+                    .unwrap_or_else(|| env::var_os("DESKTOP_PET_TRACE").is_some()),
+                dev.and_then(|dev| dev.trace_input)
+                    .unwrap_or_else(|| env::var_os("DESKTOP_PET_TRACE_INPUT").is_some()),
+            )
         };
-        let startup = StartupConfig::load(root, dev_path.as_deref())?;
-        let variant = match env::var("DESKTOP_PET_FORMAT").as_deref() {
-            Ok("rgba8") => Variant::Rgba8,
-            Ok("bc7") => Variant::Bc7,
-            #[cfg(feature = "p1b-reference")]
-            Ok("ffmpeg") => Variant::Ffmpeg,
-            Ok("png") | Err(_) => Variant::Png,
-            Ok(other) => {
-                eprintln!("Unknown asset format {other}; using PNG");
-                Variant::Png
-            }
-        };
+        #[cfg(not(feature = "development"))]
+        let (variant, trace_playback, trace_input) = (Variant::Png, false, false);
         Ok(Self {
             startup,
             variant,
-            trace_playback: env::var_os("DESKTOP_PET_TRACE").is_some(),
-            trace_input: env::var_os("DESKTOP_PET_TRACE_INPUT").is_some(),
+            trace_playback,
+            trace_input,
         })
+    }
+}
+
+#[cfg(feature = "development")]
+fn development_format() -> Variant {
+    match env::var("DESKTOP_PET_FORMAT").as_deref() {
+        Ok("rgba8") => Variant::Rgba8,
+        Ok("bc7") => Variant::Bc7,
+        #[cfg(feature = "p1b-reference")]
+        Ok("ffmpeg") => Variant::Ffmpeg,
+        Ok("png") | Err(_) => Variant::Png,
+        Ok(other) => {
+            eprintln!("Unknown asset format {other}; using PNG");
+            Variant::Png
+        }
     }
 }
 

@@ -6,7 +6,6 @@ mod settings;
 
 use std::{
     error::Error,
-    io,
     path::PathBuf,
     sync::{Arc, mpsc},
     thread,
@@ -23,7 +22,7 @@ use winit::{
 };
 
 use crate::{
-    core::{Pet, initial_side_dip},
+    core::{Pet, initial_side_dip, preferences::INITIAL_SCALE},
     media::{
         Variant,
         playback::{PageResult, Playback},
@@ -47,7 +46,6 @@ pub(crate) enum AppEvent {
     Gesture(Gesture),
     PetDeviceLost,
     OpenSettings,
-    PackReady(io::Result<Box<LoadedPack>>),
     PageReady(PageResult),
 }
 
@@ -69,8 +67,7 @@ struct Scene {
     window: Arc<Window>,
     sample: Placeholder,
     playback: Option<Playback>,
-    pack_worker: Option<thread::JoinHandle<()>>,
-    pack_path: Option<PathBuf>,
+    pack_path: PathBuf,
     pack_status: String,
     assets: CharacterAssets,
     sound: Sound,
@@ -130,7 +127,8 @@ impl Scene {
         options: &launch::LaunchOptions,
         instance: &Instance,
     ) -> Result<Self, Box<dyn Error>> {
-        let scale = options.startup.scale_percent;
+        let config = &options.startup.config;
+        let scale = config.initial_scale_percent.unwrap_or(INITIAL_SCALE);
         let attributes = Window::default_attributes()
             .with_title("Desktop Pet ChatGPT")
             .with_inner_size(LogicalSize::new(256.0, 256.0))
@@ -147,26 +145,53 @@ impl Scene {
         let geometry = launch::StartupGeometry::Product;
         let window = Arc::new(event_loop.create_window(attributes)?);
         let sample = Placeholder::load()?;
-        let mut input = WindowInput::new(
+        let wants_bc7 = options.variant == Variant::Bc7;
+        let mut renderer = pollster::block_on(Renderer::new(
+            Arc::clone(&window),
+            sample.view(),
+            wants_bc7,
+            proxy.clone(),
+        ))?;
+        let variant = if wants_bc7 && !renderer.supports_bc7() {
+            eprintln!("BC7 unavailable on this device; using RGBA8");
+            Variant::Rgba8
+        } else {
+            options.variant
+        };
+        let (pack_path, pack, pack_status) = assets::load_startup_pack(
+            options.startup.pack_path.as_deref(),
+            variant,
+            &proxy,
+            &mut renderer,
+        )?;
+        if options.trace_playback {
+            pack.trace_resources();
+        }
+        let LoadedPack {
+            playback,
+            assets,
+            click_wave,
+        } = pack;
+        let input = WindowInput::new(
             &window,
             proxy.clone(),
             options.trace_input,
             instance.marker(),
         )?;
         let display = input.display();
-        let physical_mm = if options.startup.saved_size.is_none() && geometry.probe_edid() {
+        let physical_mm = if config.saved_size.is_none() && geometry.probe_edid() {
             probe_dimensions(display)
         } else {
             None
         };
         let runtime = RuntimeSettings {
-            preferences: options.startup.preferences(),
-            size: options.startup.saved_size.unwrap_or_else(|| {
-                crate::core::preferences::SavedSize {
+            preferences: config.preferences,
+            size: config
+                .saved_size
+                .unwrap_or_else(|| crate::core::preferences::SavedSize {
                     base_dip: base_dip(display, physical_mm, window.scale_factor()),
                     percent: scale,
-                }
-            }),
+                }),
         };
         let side_dip = runtime.size.dip();
         let applied_size = if geometry.fixed() {
@@ -195,52 +220,18 @@ impl Scene {
             window.scale_factor(),
             window.inner_size()
         );
-        input.apply_hit_region(sample.view())?;
-        let variant = options.variant;
-        let root = options.startup.pack_path.clone();
-        let wants_bc7 = root.is_some() && variant == Variant::Bc7;
-        let renderer = pollster::block_on(Renderer::new(
-            Arc::clone(&window),
-            sample.view(),
-            wants_bc7,
-            proxy.clone(),
-        ))?;
-        window.set_visible(pet.visible());
-        window.request_redraw();
-        let mut pack_status = "正在加载素材包".to_owned();
-        let pack_worker = if let Some(root) = root.clone() {
-            match thread::Builder::new()
-                .name("asset-pack".into())
-                .spawn(move || {
-                    let frames = proxy.clone();
-                    let pack = LoadedPack::open(&root, variant, move |page| {
-                        frames.send_event(AppEvent::PageReady(page)).is_ok()
-                    })
-                    .map(Box::new);
-                    let _ = proxy.send_event(AppEvent::PackReady(pack));
-                }) {
-                Ok(worker) => Some(worker),
-                Err(error) => {
-                    pack_status = format!("无法加载素材包，使用内置占位图。{error}");
-                    eprintln!("{pack_status}");
-                    None
-                }
-            }
-        } else {
-            pack_status = "未找到素材包，正在使用内置占位图。".to_owned();
-            None
-        };
-        Ok(Self {
+        let mut sound = Sound::default();
+        sound.replace(click_wave);
+        let mut scene = Self {
             input,
             renderer: Some(renderer),
             window,
             sample,
-            playback: None,
-            pack_worker,
-            pack_path: root,
+            playback: Some(playback),
+            pack_path,
             pack_status,
-            assets: Default::default(),
-            sound: Sound::default(),
+            assets,
+            sound,
             runtime,
             wants_bc7,
             passthrough,
@@ -261,7 +252,10 @@ impl Scene {
                 pending: None,
                 action: String::new(),
             }),
-        })
+        };
+        scene.refresh_frame()?;
+        scene.window.set_visible(scene.visible);
+        Ok(scene)
     }
 
     fn set_passthrough(&mut self, enabled: bool) -> Result<(), String> {
@@ -491,53 +485,6 @@ impl ApplicationHandler<AppEvent> for App {
                     playback.accept(result);
                 }
             }
-            AppEvent::PackReady(result) => {
-                crate::platform::reap(scene.pack_worker.take());
-                match result {
-                    Ok(pack) => {
-                        let LoadedPack {
-                            mut playback,
-                            assets,
-                            click_wave,
-                        } = *pack;
-                        if scene
-                            .renderer
-                            .as_ref()
-                            .is_some_and(|renderer| !renderer.supports_bc7())
-                        {
-                            playback.use_compatible_format();
-                        }
-                        if scene.trace.is_some() {
-                            use sha2::{Digest, Sha256};
-                            let poster = assets.poster.as_ref().map(|image| {
-                                let mut hash = Sha256::new();
-                                for pixel in &image.pixels {
-                                    hash.update(pixel.to_array());
-                                }
-                                format!("{:x}", hash.finalize())
-                            });
-                            let name = assets
-                                .name
-                                .as_ref()
-                                .map(|name| format!("{:x}", Sha256::digest(name.as_bytes())));
-                            let wave = click_wave
-                                .as_ref()
-                                .map(|wave| format!("{:x}", Sha256::digest(wave)));
-                            eprintln!("P2 resources: {poster:?} {wave:?} {name:?}");
-                        }
-                        scene.playback = Some(playback);
-                        scene.sound.replace(click_wave);
-                        scene.assets = assets;
-                        scene.pack_status = "当前素材包已加载。".into();
-                        scene.play_base();
-                    }
-                    Err(error) => {
-                        eprintln!("Could not open asset pack; using placeholder: {error}");
-                        scene.pack_status = format!("素材包不可用，正在使用内置占位图。{error}");
-                    }
-                }
-                self.refresh_settings_character();
-            }
             AppEvent::PetDeviceLost => {
                 if scene.device_rebuilt {
                     self.error = Some("Pet GPU device was lost again after recovery".into());
@@ -683,7 +630,6 @@ impl Drop for Scene {
     fn drop(&mut self) {
         self.sound.stop();
         drop(self.playback.take());
-        crate::platform::reap(self.pack_worker.take());
     }
 }
 

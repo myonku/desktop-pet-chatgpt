@@ -171,3 +171,29 @@ pub fn reveal_directory(path: &Path) -> io::Result<()> {
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain([0]).collect()
 }
+
+pub fn confirm_config_reset(problem: &str) -> bool {
+    let message = wide(&format!(
+        "无法加载配置文件。是否备份原文件并用默认配置覆盖？选择「否」将退出。\n\n{problem}"
+    ));
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            PCWSTR(message.as_ptr()),
+            w!("桌宠配置无法加载"),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND,
+        ) == IDYES
+    }
+}
+
+pub fn show_config_error(message: &str) {
+    let message = wide(message);
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            PCWSTR(message.as_ptr()),
+            w!("桌宠配置恢复失败"),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
+}

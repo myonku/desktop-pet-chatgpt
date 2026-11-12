@@ -17,6 +17,7 @@ static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default = "schema_version")]
     schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_scale_percent: Option<u16>,
@@ -26,6 +27,33 @@ pub struct Config {
     pub pack_path: Option<PathBuf>,
     #[serde(default)]
     pub preferences: Preferences,
+    #[cfg(feature = "development")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub development: Option<Development>,
+}
+
+fn schema_version() -> u32 {
+    SCHEMA_VERSION
+}
+
+#[cfg(feature = "development")]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Development {
+    pub format: Option<AssetFormat>,
+    pub trace_playback: Option<bool>,
+    pub trace_input: Option<bool>,
+}
+
+#[cfg(feature = "development")]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AssetFormat {
+    Png,
+    Rgba8,
+    Bc7,
+    #[cfg(feature = "p1b-reference")]
+    Ffmpeg,
 }
 
 impl Default for Config {
@@ -36,12 +64,22 @@ impl Default for Config {
             saved_size: None,
             pack_path: None,
             preferences: Preferences::default(),
+            #[cfg(feature = "development")]
+            development: None,
         }
     }
 }
 
 impl Config {
-    pub fn validate(&self) -> io::Result<()> {
+    fn validate(&self, development_file: bool) -> io::Result<()> {
+        #[cfg(feature = "development")]
+        if self.development.is_some() && !development_file {
+            return Err(invalid(
+                "[development] is only allowed in desktop-pet.dev.toml",
+            ));
+        }
+        #[cfg(not(feature = "development"))]
+        let _ = development_file;
         if self.schema_version != SCHEMA_VERSION {
             return Err(invalid("expected schema_version = 1"));
         }
@@ -67,22 +105,25 @@ impl Config {
 }
 
 pub struct ConfigStore {
-    root: PathBuf,
+    file: PathBuf,
+    development_file: bool,
     snapshot: Option<Vec<u8>>,
     problem: Option<String>,
     unreadable: bool,
 }
 
 impl ConfigStore {
-    pub fn load(root: PathBuf) -> (Self, Config) {
-        let file = root.join("config.json");
+    pub fn load(file: PathBuf, development_file: bool) -> (Self, Option<Config>) {
         let (snapshot, result, unreadable) = match read_snapshot(&file) {
             Ok(Some(bytes)) => {
-                let json = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
-                let result = serde_json::from_slice::<Config>(json)
+                let toml = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
+                let result = std::str::from_utf8(toml)
                     .map_err(io::Error::other)
+                    .and_then(|text| {
+                        toml_edit::de::from_str::<Config>(text).map_err(io::Error::other)
+                    })
                     .and_then(|config| {
-                        config.validate()?;
+                        config.validate(development_file)?;
                         Ok(config)
                     });
                 (Some(bytes), result, false)
@@ -96,17 +137,22 @@ impl ConfigStore {
             .map(|error| format!("{} — {error}", file.display()));
         (
             Self {
-                root,
+                file,
+                development_file,
                 snapshot,
                 problem,
                 unreadable,
             },
-            result.unwrap_or_default(),
+            result.ok(),
         )
     }
 
     pub fn root(&self) -> &Path {
-        &self.root
+        self.file.parent().unwrap()
+    }
+
+    pub fn is_missing(&self) -> bool {
+        self.snapshot.is_none() && self.problem.is_none()
     }
 
     pub fn problem(&self) -> Option<&str> {
@@ -114,36 +160,38 @@ impl ConfigStore {
     }
 
     pub fn save(&mut self, config: &Config, repair: bool) -> io::Result<Option<PathBuf>> {
-        config.validate()?;
-        let file = self.root.join("config.json");
-        if self.unreadable || self.problem.is_some() && !repair {
-            return Err(io::Error::other(
-                "配置文件不可写。请修复文件后重启，或在设置中明确恢复默认值。",
-            ));
+        config.validate(self.development_file)?;
+        if self.unreadable {
+            return Err(io::Error::other("无法备份原配置。请检查文件后重启。"));
         }
-        if read_snapshot(&file)? != self.snapshot {
+        if self.problem.is_some() && !repair {
+            return Err(io::Error::other("覆盖无效配置需要用户确认。"));
+        }
+        if read_snapshot(&self.file)? != self.snapshot {
             return Err(io::Error::other("配置文件已在外部更改，请重启后再保存。"));
         }
-        let mut data = serde_json::to_vec_pretty(config).map_err(io::Error::other)?;
-        data.push(b'\n');
+        let data = toml_edit::ser::to_string_pretty(config)
+            .map_err(io::Error::other)?
+            .into_bytes();
         if data.len() as u64 > CONFIG_LIMIT {
             return Err(invalid("configuration exceeds 64 KiB"));
         }
         let backup = if let (Some(_), Some(original)) = (&self.problem, &self.snapshot) {
-            let folder = self.root.join("backups");
+            let folder = self.root().join("backups");
             fs::create_dir_all(&folder)?;
-            let path = folder.join(format!("config-invalid-{}.json", file_suffix()));
+            let name = self.file.file_stem().unwrap().to_string_lossy();
+            let path = folder.join(format!("{name}-invalid-{}.toml", file_suffix()));
             write_new(&path, original)?;
             Some(path)
         } else {
             None
         };
 
-        fs::create_dir_all(&self.root)?;
-        let staged = self.root.join(format!(".config-{}.tmp", file_suffix()));
+        fs::create_dir_all(self.root())?;
+        let staged = self.root().join(format!(".config-{}.tmp", file_suffix()));
         write_new(&staged, &data)?;
         // Same-directory rename atomically replaces the destination on Windows.
-        if let Err(error) = fs::rename(&staged, &file) {
+        if let Err(error) = fs::rename(&staged, &self.file) {
             let _ = fs::remove_file(staged);
             return Err(error);
         }

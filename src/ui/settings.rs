@@ -27,7 +27,6 @@ pub struct SettingsWindow {
     panel: Panel,
     pub draft: SettingsDraft,
     pub notice: Option<String>,
-    pub problem: Option<String>,
     pub saved_autostart: Option<bool>,
     pub development: bool,
     poster: Option<egui::TextureHandle>,
@@ -48,7 +47,6 @@ impl SettingsWindow {
             draft,
             development,
             notice: None,
-            problem: None,
             saved_autostart: None,
             poster: None,
             name: "桌宠".to_owned(),
@@ -104,13 +102,6 @@ impl SettingsWindow {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        if let Some(problem) = &self.problem {
-                            ui.colored_label(
-                                ui.visuals().warn_fg_color,
-                                "配置读取失败，当前使用默认值。恢复默认前会备份可读取的原文件。",
-                            );
-                            ui.label(problem);
-                        }
                         if self.development {
                             ui.label("开发配置生效中。本窗口的改动只影响本次运行。");
                         }
@@ -198,15 +189,7 @@ impl SettingsWindow {
                             } else {
                                 "应用并保存"
                             };
-                            if record(
-                                "save",
-                                ui.add_enabled(
-                                    self.problem.is_none() || self.development,
-                                    egui::Button::new(label),
-                                ),
-                            )
-                            .clicked()
-                            {
+                            if record("save", ui.button(label)).clicked() {
                                 action = Some(SettingsAction::Save);
                             }
                             if record("reset", ui.button("恢复默认")).clicked() {
