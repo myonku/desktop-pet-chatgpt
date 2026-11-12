@@ -4,7 +4,10 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use winit::{event_loop::EventLoopProxy, window::Window};
 
-use crate::{app::AppEvent, media::frame::FrameView};
+use crate::{
+    app::AppEvent,
+    media::frame::{Canvas, FrameView},
+};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const ALPHA: wgpu::CompositeAlphaMode = wgpu::CompositeAlphaMode::PreMultiplied;
@@ -18,6 +21,7 @@ pub struct Renderer {
     sprite: Option<Sprite>,
     frame_rect: wgpu::Buffer,
     upload: Option<wgpu::SubmissionIndex>,
+    canvas: Canvas,
     presented: bool,
 }
 
@@ -110,7 +114,7 @@ impl Renderer {
         });
         let frame_rect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Frame rectangle"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -123,6 +127,7 @@ impl Renderer {
             sprite: None,
             frame_rect,
             upload: None,
+            canvas: frame.canvas,
             presented: false,
         };
         renderer.show(None, frame)?;
@@ -214,6 +219,7 @@ impl Renderer {
             );
             self.upload = Some(self.queue.submit([]));
         }
+        self.canvas = frame.canvas;
         let rect = frame.rect.map(u32::to_le_bytes);
         self.queue
             .write_buffer(&self.frame_rect, 0, rect.as_flattened());
@@ -235,6 +241,12 @@ impl Renderer {
             self.surface.configure(&self.device, &self.config);
         }
         let frame = self.surface.get_current_texture()?;
+        let destination = self
+            .canvas
+            .destination([width, height])
+            .map(i32::to_le_bytes);
+        self.queue
+            .write_buffer(&self.frame_rect, 16, destination.as_flattened());
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {

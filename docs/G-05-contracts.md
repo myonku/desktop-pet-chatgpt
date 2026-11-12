@@ -49,7 +49,9 @@ python scripts/validation/p1/measure-p1b-playback.py --exe "$build/desktop-pet-c
 
 包内文件采用以 `/` 分隔的相对路径，每段仅允许 ASCII 字母、数字、`._-`，且不能是空段、`.` 或 `..`。解析后的文件须在包根内。页目录由清单决定。PNG 为默认兼容档，请求 BC7 时按设备与页面支持情况回退到可用的 RGBA8 或 PNG。包无效且无可用包时使用内置占位，运行中的动作回退见 [G-03](G-03-architecture.md#2-核心契约rust-实现草案语义)。320×320 代表页参考 4–5 帧横排，预算见 [G-06](G-06-validation.md#3-性能实验与预算)。
 
-v1 读取器拒绝未知字段。P2-01 先记录首批产品动作 ID、必备待机绑定、可选动作回退、画布坐标单位及变换顺序，再用同一套规则制作合成包和代表包。路线参数由动作目录或领域配置提供，包内的 `movement_us` 定义该动作允许产生位移的时间窗。需要变更清单字段时，先明确现有 v1 包的兼容策略。
+v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机。可选 ID 为 `interact`、`drag`、`land`、`move-left`、`move-right`、`edge-left`、`edge-right`、`peek-left`、`peek-right`。缺失姿态回到待机，缺失互动保持当前动画，缺失或运行时失败的预览在菜单中禁用。P1 已有的循环单动作 `move` 和 `reference` 包仍可播放。动作列表顺序对绑定无影响。
+
+`logical_size` 定义画布宽高，`anchor` 是相对画布的归一化坐标，`offset` 以适配后的画布宽高为单位，正值向右、向下。先将画布等比居中适配视口，再绕锚点应用 `scale`，最后应用偏移并量化到像素边界。呈现和 alpha 命中共用目标矩形及像素中心采样。自主移动要求一次性动作同时声明对应方向与非空 `movement_us` 窗口。手动预览可原地播放这些动作。
 
 运行时页限制比整包静态校验更严格。当前单播放页上限 6 MiB，BC7 同时计入压缩块和 CPU 命中用 RGBA。PNG 输入和解码器工作区各有 3 MiB 限额。清单及单个音频/文本载荷各有 1 MiB 限额。P2 制包和 P4 附件装配均使用 `validate-pack --distribution` 检查声明的全部页档。可选资源未声明时按语义键回退，已声明载荷的有效性仍按包校验规则检查。
 
@@ -86,10 +88,10 @@ P2-02 在设置接入前定义最小产品 schema，统一校验缺项、取值�
 
 | 字段 | 首轮规则 |
 | --- | --- |
-| `initial_scale_percent` | 50–200 的整数，内置默认 70。当前乘以 P1 的 256×256 DIP 基准，100 可复现 P1 尺寸。显示器物理尺寸探测待 P2-01 实测接入 |
+| `initial_scale_percent` | 50–200 的整数，内置默认 70。乘以物理探测推导的基准。物理尺寸未知时乘以 256×256 DIP |
 | `pack_path` | 含 `manifest.json` 的本地目录。相对路径以各自配置文件所在目录为准。未设置时查找 EXE 旁的 `resources/default/`，缺包时使用占位 |
 
-用户 JSON 示例为 `{"schema_version": 1, "initial_scale_percent": 70, "pack_path": "packs/dawn"}`。开发 TOML 可省略版本，复制样板后用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。格式、跟踪与参照参数仍由 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE`、`DESKTOP_PET_TRACE_INPUT` 和参照 feature 下的 `DESKTOP_PET_REFERENCE_*` 控制。采样脚本为每次运行生成独立 TOML，并显式使用 100% 以保留 P1 对照尺寸。运行时保存与一键恢复随 P2-02 设置界面实施。
+用户 JSON 示例为 `{"schema_version": 1, "initial_scale_percent": 70, "pack_path": "packs/dawn"}`。开发 TOML 可省略版本，复制样板后用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。格式、跟踪与参照参数仍由 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE`、`DESKTOP_PET_TRACE_INPUT` 和参照 feature 下的 `DESKTOP_PET_REFERENCE_*` 控制。P1 采样脚本为每次运行生成独立的 100% TOML。参照构建可用 `DESKTOP_PET_REFERENCE_CLIENT=320,x,y` 固定物理窗口尺寸，或用 `auto,x,y` 和 `dip,x,y` 在指定屏上验证物理探测与 DIP 回退。运行时保存与一键恢复随 P2-02 设置界面实施。
 
 ## 源码、程序与素材附件
 

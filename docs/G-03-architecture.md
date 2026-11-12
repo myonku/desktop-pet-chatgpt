@@ -22,9 +22,9 @@ core 不导入 winit、wgpu、Win32、SQLite 或具体 provider。app 编排模�
 | `src/platform/windows/`、`src/ui/` | Win32 输入、DPI 与托盘，独立 egui 中文预览 |
 | `tests/`、`scripts/validation/` | 公开接口回归测试、合成输入及阶段采样 |
 
-当前启动配置从文件选包，播放器仍从清单首动作构建时间表。Win32 回调直接改变拖拽位置，应用直接管理菜单、可见性和渲染恢复。P2 将这些路径逐步接入领域事件和效果。应用向 core 提供手势与几何数据，core 统一决定动作和位置意图，Windows 层负责抓取、屏幕探测、坐标换算与应用位置。拖拽期间由拖拽路径独占位置写入，结束后由 core 接回最新窗口位置。
+启动配置从文件选包，播放器按稳定动作 ID 选择时间表。应用将手势、时钟和窗口几何交给 core 的状态与路线规则，将结果应用到播放器、窗口和菜单。Windows 层负责抓取、屏幕探测、坐标换算和即时拖动。拖拽期间由原生输入独占位置写入，结束后应用用最新窗口位置判定吸边和后续路线。
 
-以下职责表用于后续模块演进。P2 才引入 core 与 storage，P3 才引入 integrations。
+P2-01 引入 core，storage 和 integrations 随后续节点实现。
 
 | 模块（拟定路径） | 拥有的数据与职责 | 不承担 |
 | --- | --- | --- |
@@ -55,13 +55,13 @@ core 不导入 winit、wgpu、Win32、SQLite 或具体 provider。app 编排模�
 
 FrameHandle 含页 ID、页内区域、时间戳、逻辑画布与锚点；不能把纹理句柄暴露给 core。命中使用与显示变换一致的 CPU alpha mask，拖动命中区域和视觉透明独立验证。
 
-core 拥有动作选择、中断和返回基础状态的规则。播放层根据所选动作的时间表发出帧请求，并报告一次性动作完成、资源就绪与失败。等待首帧和后续缺页分别有截止时间；等待时保留已呈现帧，失败后尝试可用基础动作，基础动作也不可用时显示占位。动画变换由播放元数据和窗口几何共同确定，由呈现和命中共用。
+core 提供手势判定、活动优先级、工作区约束和位移插值。应用协调素材目录、基础姿态回退和显示器状态。播放层根据选中动作的时间表发出帧请求，并报告一次性动作完成、资源就绪与失败。等待首帧和后续缺页各使用 750 ms 截止时间。等待时保留已呈现帧并冻结该动作时钟，失败后尝试可用基础动作，待机也失败时显示占位。动画变换由播放元数据和窗口几何共同确定，由呈现和命中共用。
 
 ### 首次尺寸与跨屏 DPI
 
-`PlatformServices` 提供目标显示器标识、工作区、当前像素范围、有效 DPI，以及可选的可视区宽高（毫米）和数据来源。P2 可调查 Windows 公开的 EDID/WMI 尺寸数据，以实际显示目标为准匹配监视器实例并考虑旋转。遇到缺失、零值、异常、实例匹配不唯一或查询超时，返回尺寸未知并采用 256×256 DIP。探测应有界，启动回退可直接出首帧。依据 [Microsoft Learn 的 EDID 尺寸字段](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorbasicdisplayparams)。
+`PlatformServices` 提供目标显示器标识、工作区、当前像素范围、有效 DPI，以及可选的可视区宽高（毫米）和数据来源。按窗口所在的 GDI 显示源查找唯一活动监视器接口，经 SetupAPI 读取设备 EDID 基本块并按当前模式旋转尺寸。校验 EDID 头、校验和、宽高范围与显示模式宽高比。探测在后台执行，首帧最多等 120 ms。未取到可信尺寸时采用 256×256 DIP。接口和尺寸字段见 [EnumDisplayDevicesW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaydevicesw)和 [WmiMonitorBasicDisplayParams](https://learn.microsoft.com/en-us/windows/win32/wmicoreprov/wmimonitorbasicdisplayparams)。
 
-候选尺寸算法以可视区物理高度乘目标比例，先限制在可用的物理大小区间，再按当前显示模式下的像素密度换算到窗口像素与 DIP。保持画布纵横比，并按工作区约束尺寸和位置。比例、物理上下限及数据可靠性在 P2 实测后决定。Windows 有效 DPI 用于像素和 DIP 换算及后续跨屏呈现。依据 [Microsoft Learn 的 DPI 换算说明](https://learn.microsoft.com/en-us/windows/win32/learnwin32/dpi-and-device-independent-pixels)。
+初始方形窗口基准取显示器可视高度的 16%，限于 36–90 mm，再根据显示模式和有效 DPI 换算。按初始缩放比例得到逻辑边长，窗口限制在工作区内。跨屏沿用该逻辑尺寸并应用新屏 DPI，画布在窗口内等比适配。Windows 有效 DPI 用于像素和 DIP 换算及后续跨屏呈现。依据 [Microsoft Learn 的 DPI 换算说明](https://learn.microsoft.com/en-us/windows/win32/learnwin32/dpi-and-device-independent-pixels)。
 
 ## 3. 线程、背压和取消
 

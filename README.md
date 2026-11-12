@@ -1,6 +1,6 @@
 # GPT 白龙娘桌宠
 
-面向 Windows 的非官方桌宠项目。基础桌宠可离线运行，计划支持透明动画、拖拽、自移动、吸边、缩放、托盘、隐藏和音效。外部任务提醒、额度和会话交互是可选集成。首发目标为 Windows x64，优先验证 Windows 11。
+面向 Windows 的非官方桌宠项目。基础桌宠可离线运行，已支持透明动画、拖拽、自移动、吸边、初始缩放、托盘和隐藏。外部任务提醒、额度和会话交互是可选集成。首发目标为 Windows x64，优先验证 Windows 11。
 
 ## 当前运行方式
 
@@ -10,9 +10,15 @@
 cargo run --locked
 ```
 
-有可用素材包时播放包内动画，否则显示内置透明色阶样本。按住可见区域拖动，右键打开菜单，可打开独立的中文输入预览窗口。开启鼠标穿透后，使用系统托盘里的 Desktop Pet ChatGPT 菜单恢复交互或退出。
+有可用素材包时播放待机，否则显示内置透明色阶样本。单击互动，按住角色可见区域拖动，靠近工作区左右边缘松手可吸附。吸附后单击切换探头，菜单可展开。右键或托盘菜单可预览动作、切换自移动和隐藏状态，也可打开独立的中文输入预览窗口。开启鼠标穿透后，使用系统托盘里的 Desktop Pet ChatGPT 菜单恢复交互或退出。
 
 本地开发时可复制 `desktop-pet.example.toml` 为 `desktop-pet.dev.toml`，在其中设置初始缩放和素材包目录，再用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。普通启动从用户 `config.json` 读取同名字段。素材格式默认 PNG；开发时仍可通过 `DESKTOP_PET_FORMAT` 选择 `rgba8` 或 `bc7`。配置示例和素材验证见 [G-05](docs/G-05-contracts.md#配置分层)。
+
+可生成一套自有多动作包体验全部核心行为。生成后在开发配置中将 `pack_path` 指向 `artifacts/validation/p2/fixtures/p2-behavior`。
+
+```powershell
+python scripts/validation/p2/generate-fixtures.py
+```
 
 ## 文档索引
 

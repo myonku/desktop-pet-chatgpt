@@ -1,6 +1,6 @@
 use std::{error::Error, io::Cursor};
 
-use crate::media::frame::FrameView;
+use crate::media::frame::{Canvas, FrameView};
 
 pub(crate) struct Placeholder {
     pub width: u32,
@@ -13,6 +13,7 @@ impl Placeholder {
         FrameView {
             page_size: [self.width, self.height],
             rect: [0, 0, self.width, self.height],
+            canvas: Canvas::untransformed([self.width, self.height]),
             rgba: &self.rgba,
             bc7: None,
         }

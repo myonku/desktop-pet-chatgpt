@@ -12,9 +12,16 @@ use std::{
 
 #[cfg(feature = "p1b-reference")]
 use super::reference::{Decoder, DecoderProcess};
-use super::{Pack, PagePixels, Variant, frame::FrameView};
+use super::{
+    Direction, Pack, PagePixels, Variant,
+    frame::{Canvas, FrameView},
+};
+use crate::core::{IDLE, PAGE_TIMEOUT, Side};
+
+static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 
 pub struct PageResult {
+    source: u64,
     generation: u64,
     index: usize,
     pixels: io::Result<PagePixels>,
@@ -29,7 +36,8 @@ struct Request {
 struct FrameSource {
     requests: SyncSender<Request>,
     generation: Arc<AtomicU64>,
-    pending: bool,
+    id: u64,
+    pending: Option<u64>,
     #[cfg(feature = "p1b-reference")]
     decoder_process: Option<DecoderProcess>,
 }
@@ -43,6 +51,7 @@ impl FrameSource {
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
+        let id = NEXT_SOURCE.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "p1b-reference")]
         let decoder_process = decoder.as_ref().map(Decoder::process);
         thread::Builder::new()
@@ -60,6 +69,7 @@ impl FrameSource {
                     #[cfg(not(feature = "p1b-reference"))]
                     let pixels = pack.load_page(request.index, request.variant, cancelled);
                     let result = PageResult {
+                        source: id,
                         generation: request.generation,
                         index: request.index,
                         pixels,
@@ -72,28 +82,33 @@ impl FrameSource {
         Ok(Self {
             requests,
             generation,
-            pending: false,
+            id,
+            pending: None,
             #[cfg(feature = "p1b-reference")]
             decoder_process,
         })
     }
 
     fn request(&mut self, index: usize, variant: Variant) -> io::Result<()> {
-        if !self.pending {
+        if self.pending.is_none() {
+            let generation = self.generation.load(Ordering::Relaxed);
             self.requests
                 .try_send(Request {
-                    generation: self.generation.load(Ordering::Relaxed),
+                    generation,
                     index,
                     variant,
                 })
                 .map_err(io::Error::other)?;
-            self.pending = true;
+            self.pending = Some(generation);
         }
         Ok(())
     }
 
     fn accept(&mut self, result: PageResult) -> Option<(usize, io::Result<PagePixels>)> {
-        self.pending = false;
+        if result.source != self.id || self.pending != Some(result.generation) {
+            return None;
+        }
+        self.pending = None;
         (result.generation == self.generation.load(Ordering::Relaxed))
             .then_some((result.index, result.pixels))
     }
@@ -134,16 +149,45 @@ impl Timeline {
     }
 }
 
-pub struct Playback {
-    source: FrameSource,
+struct Animation {
+    id: String,
     timeline: Timeline,
     frames: Vec<(usize, [u32; 4])>,
+    canvas: Canvas,
+    movement: Option<[u64; 2]>,
+    directions: [bool; 2],
+}
+
+#[derive(Clone, Copy)]
+struct Selected {
+    sequence: u128,
+    rect: [u32; 4],
+    canvas: Canvas,
+}
+
+pub struct Playback {
+    source: FrameSource,
+    actions: Vec<Animation>,
+    base: usize,
+    active: usize,
+    once: bool,
     variant: Variant,
     epoch: Option<Instant>,
+    waiting: Option<(Instant, Duration)>,
     displayed: Option<(usize, PagePixels)>,
     ready: Option<(usize, PagePixels)>,
-    selected: Option<u128>,
+    failed: Option<(usize, io::Error)>,
+    selected: Option<Selected>,
+    present_sequence: Option<u128>,
     pack_id: String,
+    announced: bool,
+}
+
+pub struct PlaybackTick {
+    pub changed: bool,
+    pub deadline: Option<Instant>,
+    pub elapsed: Option<Duration>,
+    pub finished: bool,
 }
 
 impl Playback {
@@ -154,30 +198,65 @@ impl Playback {
     ) -> io::Result<Self> {
         let pack = Arc::new(Pack::open(path)?);
         let manifest = pack.manifest();
-        let action = &manifest.actions[0];
+        let base = manifest
+            .actions
+            .iter()
+            .position(|action| action.id == IDLE && action.looping)
+            .or(match manifest.actions.as_slice() {
+                [action]
+                    if action.looping && matches!(action.id.as_str(), "move" | "reference") =>
+                {
+                    Some(0)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| io::Error::other("asset pack needs a looping idle action"))?;
         let pages: std::collections::BTreeMap<_, _> = manifest
             .pages
             .iter()
             .enumerate()
             .map(|(index, page)| (page.id.as_str(), index))
             .collect();
-        let frames = action
-            .frames
+        let actions = manifest
+            .actions
             .iter()
-            .map(|frame| (pages[frame.page.as_str()], frame.rect))
-            .collect();
-        let ends = action
-            .frames
-            .iter()
-            .scan(0, |elapsed, frame| {
-                *elapsed += frame.duration_us;
-                Some(*elapsed)
+            .map(|action| Animation {
+                id: action.id.clone(),
+                timeline: Timeline {
+                    ends: action
+                        .frames
+                        .iter()
+                        .scan(0, |elapsed, frame| {
+                            *elapsed += frame.duration_us;
+                            Some(*elapsed)
+                        })
+                        .collect(),
+                    looping: action.looping,
+                },
+                frames: action
+                    .frames
+                    .iter()
+                    .map(|frame| (pages[frame.page.as_str()], frame.rect))
+                    .collect(),
+                canvas: Canvas {
+                    size: action.logical_size,
+                    anchor: action.anchor,
+                    offset: action.offset,
+                    scale: action.scale,
+                },
+                movement: action.movement_us,
+                directions: [
+                    action
+                        .directions
+                        .iter()
+                        .any(|value| matches!(value, Direction::Left)),
+                    action
+                        .directions
+                        .iter()
+                        .any(|value| matches!(value, Direction::Right)),
+                ],
             })
             .collect();
-        let timeline = Timeline {
-            ends,
-            looping: action.looping,
-        };
         let pack_id = manifest.pack_id.clone();
         #[cfg(feature = "p1b-reference")]
         let decoder = (variant == Variant::Ffmpeg)
@@ -190,21 +269,75 @@ impl Playback {
                 decoder,
                 deliver,
             )?,
-            timeline,
-            frames,
+            actions,
+            base,
+            active: base,
+            once: false,
             variant,
             pack_id,
+            announced: false,
             epoch: None,
+            waiting: None,
             displayed: None,
             ready: None,
+            failed: None,
             selected: None,
+            present_sequence: None,
         })
+    }
+
+    pub fn action_ids(&self) -> impl Iterator<Item = &str> {
+        self.actions
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != self.base)
+            .map(|(_, action)| action.id.as_str())
+    }
+
+    pub fn contains(&self, id: &str) -> bool {
+        self.actions.iter().any(|action| action.id == id)
+    }
+
+    pub fn movement(&self, side: Side) -> Option<[u64; 2]> {
+        let action = self
+            .actions
+            .iter()
+            .find(|action| action.id == side.movement())?;
+        let index = usize::from(side == Side::Right);
+        action.movement.filter(|[start, end]| {
+            start < end && action.directions[index] && !action.timeline.looping
+        })
+    }
+
+    pub fn play(&mut self, id: Option<&str>, once: bool) -> bool {
+        let index = match id {
+            Some(id) => self.actions.iter().position(|action| action.id == id),
+            None => Some(self.base),
+        };
+        let Some(index) = index else {
+            return false;
+        };
+        self.pause();
+        self.active = index;
+        self.once = once;
+        self.present_sequence = None;
+        true
+    }
+
+    pub fn active_id(&self) -> &str {
+        &self.actions[self.active].id
+    }
+
+    pub fn is_base(&self) -> bool {
+        self.active == self.base && !self.once
     }
 
     pub fn pause(&mut self) {
         self.source.cancel();
         self.epoch = None;
+        self.waiting = None;
         self.ready = None;
+        self.failed = None;
     }
 
     pub fn use_compatible_format(&mut self) {
@@ -213,29 +346,29 @@ impl Playback {
             self.pause();
             self.displayed = None;
             self.selected = None;
+            self.present_sequence = None;
             eprintln!("BC7 unavailable on this device; using RGBA8");
         }
     }
 
-    pub fn invalidate_frame(&mut self) {
-        self.selected = None;
-    }
-
-    pub fn accept(&mut self, result: PageResult) -> io::Result<()> {
+    pub fn accept(&mut self, result: PageResult) {
         if let Some((index, pixels)) = self.source.accept(result) {
-            self.ready = Some((index, pixels?));
+            match pixels {
+                Ok(pixels) => self.ready = Some((index, pixels)),
+                Err(error) => self.failed = Some((index, error)),
+            }
         }
-        Ok(())
     }
 
     pub fn frame(&self) -> Option<(usize, FrameView<'_>)> {
-        let (_, pixels) = self.displayed.as_ref()?;
-        let (index, rect) = self.frames[(self.selected? % self.frames.len() as u128) as usize];
+        let (index, pixels) = self.displayed.as_ref()?;
+        let selected = self.selected?;
         Some((
-            index,
+            *index,
             FrameView {
                 page_size: pixels.size,
-                rect,
+                rect: selected.rect,
+                canvas: selected.canvas,
                 rgba: &pixels.rgba,
                 bc7: pixels.bc7.as_deref(),
             },
@@ -243,16 +376,33 @@ impl Playback {
     }
 
     pub fn sequence(&self) -> Option<u128> {
-        self.selected
+        self.selected.map(|frame| frame.sequence)
     }
 
-    pub fn tick(&mut self, now: Instant) -> io::Result<(bool, Option<Instant>)> {
-        let (sequence, delay) = self
-            .timeline
-            .at(self.epoch.map_or(Duration::ZERO, |start| now - start));
-        let frame_count = self.frames.len() as u128;
+    pub fn tick(&mut self, now: Instant) -> io::Result<PlaybackTick> {
+        let action = &self.actions[self.active];
+        let total = Duration::from_micros(*action.timeline.ends.last().unwrap());
+        if self
+            .waiting
+            .is_some_and(|(since, _)| now >= since + PAGE_TIMEOUT)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "asset page wait timed out",
+            ));
+        }
+        let elapsed = self.waiting.map_or_else(
+            || self.epoch.map_or(Duration::ZERO, |start| now - start),
+            |(_, elapsed)| elapsed,
+        );
+        let (sequence, delay) = action.timeline.at(if self.once && elapsed >= total {
+            total - Duration::from_micros(1)
+        } else {
+            elapsed
+        });
+        let frame_count = action.frames.len() as u128;
         let frame = (sequence % frame_count) as usize;
-        let (page, _) = self.frames[frame];
+        let (page, rect) = action.frames[frame];
         let mut changed = false;
         if self
             .displayed
@@ -276,33 +426,71 @@ impl Playback {
                 self.displayed = self.ready.take();
                 changed = true;
             } else {
+                let (since, _) = *self.waiting.get_or_insert((now, elapsed));
+                let deadline = since + PAGE_TIMEOUT;
+                if let Some((index, error)) = self.failed.take()
+                    && index == page
+                {
+                    return Err(error);
+                }
                 self.ready = None;
                 self.source.request(page, self.variant)?;
-                return Ok((false, None));
+                return Ok(PlaybackTick {
+                    changed: false,
+                    deadline: Some(deadline),
+                    elapsed: None,
+                    finished: false,
+                });
             }
         }
-        if self.selected.is_none() {
-            let pixels = &self.displayed.as_ref().unwrap().1;
-            let format = pixels.variant.label();
+        if !self.announced {
+            self.announced = true;
+            let format = self.displayed.as_ref().unwrap().1.variant.label();
             eprintln!(
                 "Asset playback: {} ({format}, {} frames)",
                 self.pack_id,
-                self.frames.len()
+                action.frames.len()
             );
         }
-        self.epoch.get_or_insert(now);
+        if self.waiting.take().is_some() || self.epoch.is_none() {
+            self.epoch = Some(now - elapsed);
+        }
         changed |= self
-            .selected
+            .present_sequence
             .replace(sequence)
             .is_none_or(|previous| previous % frame_count != frame as u128);
-        if delay.is_some() && self.ready.is_none() {
-            let next = (frame + 1) % self.frames.len();
-            let (next_page, _) = self.frames[next];
-            if (next != 0 || self.timeline.looping) && next_page != page {
+        self.selected = Some(Selected {
+            sequence,
+            rect,
+            canvas: action.canvas,
+        });
+        let finished = (self.once || !action.timeline.looping) && elapsed >= total;
+        if !finished && self.ready.is_none() {
+            let next = (frame + 1) % action.frames.len();
+            let next_page = action.frames[next].0;
+            if (next != 0 || (!self.once && action.timeline.looping))
+                && next_page != page
+                && self
+                    .failed
+                    .as_ref()
+                    .is_none_or(|(index, _)| *index != next_page)
+            {
                 self.source.request(next_page, self.variant)?;
             }
         }
-        Ok((changed, delay.and_then(|delay| now.checked_add(delay))))
+        Ok(PlaybackTick {
+            changed,
+            deadline: (!finished)
+                .then_some(delay)
+                .flatten()
+                .map(|delay| now + delay),
+            elapsed: Some(if self.once || !action.timeline.looping {
+                elapsed.min(total)
+            } else {
+                elapsed
+            }),
+            finished,
+        })
     }
 }
 

@@ -1,6 +1,9 @@
 pub mod media;
 
 #[cfg(windows)]
+mod core;
+
+#[cfg(windows)]
 mod app;
 #[cfg(windows)]
 mod platform;

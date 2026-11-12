@@ -6,7 +6,6 @@ use std::{
 use serde::Deserialize;
 
 const SCHEMA_VERSION: u32 = 1;
-const BASE_SIDE_DIP: f64 = 256.0;
 const DEFAULT_SCALE_PERCENT: u16 = 70;
 
 #[derive(Default, Deserialize)]
@@ -42,7 +41,7 @@ impl ConfigFile {
 }
 
 pub(super) struct StartupConfig {
-    pub side_dip: f64,
+    pub scale_percent: u16,
     pub pack_path: Option<PathBuf>,
 }
 
@@ -86,7 +85,7 @@ impl StartupConfig {
             }
         };
         Ok(Self {
-            side_dip: BASE_SIDE_DIP * f64::from(scale) / 100.0,
+            scale_percent: scale,
             pack_path,
         })
     }

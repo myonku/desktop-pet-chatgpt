@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::{cell::Cell, time::Instant};
 
 use windows::{
     Win32::{
@@ -12,14 +12,14 @@ use windows::{
         UI::{
             HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
             Shell::{
-                DefSubclassProc, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
-                NIM_SETVERSION, NIN_SELECT, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
-                RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconW,
+                DefSubclassProc, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD,
+                NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NOTIFYICON_VERSION_4,
+                NOTIFYICONDATAW, RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconW,
             },
             WindowsAndMessaging::*,
         },
     },
-    core::w,
+    core::{PCWSTR, w},
 };
 use winit::{
     dpi::PhysicalPosition,
@@ -30,6 +30,18 @@ use winit::{
 
 use crate::{app::AppEvent, media::frame::FrameView};
 
+mod display;
+pub use display::{Display, physical_size};
+
+#[derive(Debug)]
+pub enum Gesture {
+    Press,
+    Click(Instant, [i32; 2], [u32; 2]),
+    DragStarted,
+    Drop,
+    Cancel,
+}
+
 const TRAY_MESSAGE: u32 = WM_APP + 1;
 const TRAY_ID: u32 = 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
@@ -39,6 +51,9 @@ pub enum Command {
     TogglePassthrough,
     OpenPreview,
     ToggleVisibility,
+    ToggleAuto,
+    Expand,
+    Action(usize),
     Exit,
 }
 
@@ -96,6 +111,48 @@ impl WindowInput {
         Ok(input)
     }
 
+    pub fn display(&self) -> Option<Display> {
+        Display::for_window(self.hwnd)
+    }
+
+    pub fn fullscreen(&self, display: Display) -> bool {
+        display.has_fullscreen(self.hwnd)
+    }
+
+    pub fn cancel_gesture(&self) {
+        self._callback.drag.set(None);
+    }
+
+    pub fn gesture_in_progress(&self) -> bool {
+        self._callback.drag.get().is_some()
+    }
+
+    pub fn connection_hint(&self) {
+        let mut data = tray_data(self.hwnd);
+        data.uFlags = NIF_INFO;
+        for (slot, ch) in data.szInfoTitle.iter_mut().zip("查询额度".encode_utf16()) {
+            *slot = ch;
+        }
+        for (slot, ch) in data
+            .szInfo
+            .iter_mut()
+            .zip("请先启用并连接支持额度查询的客户端。".encode_utf16())
+        {
+            *slot = ch;
+        }
+        // With no tray icon, use an owned dialog so the interaction still has feedback.
+        unsafe {
+            if !self.tray || !Shell_NotifyIconW(NIM_MODIFY, &data).as_bool() {
+                MessageBoxW(
+                    self.hwnd,
+                    w!("请先启用并连接支持额度查询的客户端。"),
+                    w!("查询额度"),
+                    MB_OK,
+                );
+            }
+        }
+    }
+
     pub fn has_tray(&self) -> bool {
         self.tray
     }
@@ -144,6 +201,9 @@ impl WindowInput {
         position: Option<PhysicalPosition<i32>>,
         passthrough: bool,
         visible: bool,
+        auto: bool,
+        attached: bool,
+        actions: &[(String, bool)],
     ) -> windows::core::Result<Option<Command>> {
         // The popup is owned by this HWND and dispatched on its event thread.
         unsafe {
@@ -162,18 +222,36 @@ impl WindowInput {
             };
             let enabled = if self.tray { MF_ENABLED } else { MF_GRAYED };
             AppendMenuW(menu.0, MF_STRING | check | enabled, 1, w!("全窗口鼠标穿透"))?;
-            AppendMenuW(menu.0, MF_STRING, 2, w!("退出原型"))?;
+            AppendMenuW(menu.0, MF_STRING, 2, w!("退出"))?;
             AppendMenuW(menu.0, MF_STRING, 3, w!("中文输入预览"))?;
             AppendMenuW(
                 menu.0,
                 MF_STRING | enabled,
                 4,
                 if visible {
-                    w!("隐藏桌宠")
+                    w!("隐藏桌宠(&H)")
                 } else {
-                    w!("显示桌宠")
+                    w!("显示桌宠(&H)")
                 },
             )?;
+            let auto_checked = if auto { MF_CHECKED } else { MF_UNCHECKED };
+            AppendMenuW(menu.0, MF_STRING | auto_checked, 5, w!("自移动(&M)"))?;
+            let expand_enabled = if attached { MF_ENABLED } else { MF_GRAYED };
+            AppendMenuW(menu.0, MF_STRING | expand_enabled, 6, w!("展开(&E)"))?;
+            let submenu = Menu(CreatePopupMenu()?);
+            for (index, (label, enabled)) in actions.iter().enumerate() {
+                let label: Vec<u16> = label.encode_utf16().chain([0]).collect();
+                let state = if *enabled { MF_ENABLED } else { MF_GRAYED };
+                AppendMenuW(
+                    submenu.0,
+                    MF_STRING | state,
+                    10 + index,
+                    PCWSTR(label.as_ptr()),
+                )?;
+            }
+            AppendMenuW(menu.0, MF_POPUP, submenu.0.0 as usize, w!("动作预览(&A)"))?;
+            // The parent menu destroys the attached submenu.
+            std::mem::forget(submenu);
             let previous = GetForegroundWindow();
             let _ = SetForegroundWindow(self.hwnd);
             let selected = TrackPopupMenu(
@@ -195,6 +273,15 @@ impl WindowInput {
                 2 => Some(Command::Exit),
                 3 => Some(Command::OpenPreview),
                 4 if self.tray => Some(Command::ToggleVisibility),
+                5 => Some(Command::ToggleAuto),
+                6 if attached => Some(Command::Expand),
+                id if id >= 10
+                    && actions
+                        .get((id - 10) as usize)
+                        .is_some_and(|(_, enabled)| *enabled) =>
+                {
+                    Some(Command::Action((id - 10) as usize))
+                }
                 _ => None,
             })
         }
@@ -227,10 +314,18 @@ impl WindowInput {
             }
             let region = Region::rect(0, 0, 0, 0)?;
             let [_, _, width, height] = frame.rect;
+            let [left, top, right, bottom] = frame
+                .canvas
+                .destination([client.right as u32, client.bottom as u32]);
+            let span_x = right - left;
+            let span_y = bottom - top;
             for (y, row) in frame.rows().enumerate() {
-                let top = scaled_edge(y as u32, height, client.bottom) + offset_y;
-                let bottom = scaled_edge(y as u32 + 1, height, client.bottom) + offset_y;
-                if top == bottom {
+                let row_top = (top + scaled_edge(y as u32, height, span_y)).clamp(0, client.bottom)
+                    + offset_y;
+                let row_bottom = (top + scaled_edge(y as u32 + 1, height, span_y))
+                    .clamp(0, client.bottom)
+                    + offset_y;
+                if row_top == row_bottom {
                     continue;
                 }
                 let mut start = None;
@@ -244,12 +339,16 @@ impl WindowInput {
                     if alpha != 0 {
                         start.get_or_insert(x as u32);
                     } else if let Some(first) = start.take() {
-                        let left = scaled_edge(first, width, client.right) + offset_x;
-                        let right = scaled_edge(x as u32, width, client.right) + offset_x;
-                        if left == right {
+                        let run_left = (left + scaled_edge(first, width, span_x))
+                            .clamp(0, client.right)
+                            + offset_x;
+                        let run_right = (left + scaled_edge(x as u32, width, span_x))
+                            .clamp(0, client.right)
+                            + offset_x;
+                        if run_left == run_right {
                             continue;
                         }
-                        let run = Region::rect(left, top, right, bottom)?;
+                        let run = Region::rect(run_left, row_top, run_right, row_bottom)?;
                         if CombineRgn(region.0, region.0, run.0, RGN_OR) == RGN_ERROR {
                             return Err("could not combine alpha hit regions".into());
                         }
@@ -416,13 +515,22 @@ unsafe extern "system" fn window_proc(
         WM_POWERBROADCAST if wparam.0 == PBT_APMRESUMEAUTOMATIC as usize => {
             let _ = callback.proxy.send_event(AppEvent::ResumeDisplay);
         }
-        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => callback.drag.set(Drag::start(hwnd, lparam)),
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            callback.drag.set(Drag::start(hwnd, lparam));
+            let _ = callback.proxy.send_event(AppEvent::Gesture(Gesture::Press));
+        }
         WM_MOUSEMOVE if wparam.0 & MK_LBUTTON.0 as usize != 0 => {
             if let Some(drag) = callback.drag.get() {
                 let started = callback
                     .trace_input
                     .then(|| unsafe { GetMessageTime() as u32 });
+                let was_moving = drag.moving;
                 let drag = drag.update(hwnd, lparam);
+                if drag.moving && !was_moving {
+                    let _ = callback
+                        .proxy
+                        .send_event(AppEvent::Gesture(Gesture::DragStarted));
+                }
                 callback.drag.set(Some(drag));
                 if let Some(started) = started
                     && drag.moving
@@ -433,8 +541,26 @@ unsafe extern "system" fn window_proc(
                 }
             }
         }
-        WM_MOUSEMOVE | WM_LBUTTONUP | WM_CANCELMODE | WM_CAPTURECHANGED => {
-            callback.drag.set(None);
+        WM_LBUTTONUP => {
+            if let Some(drag) = callback.drag.take() {
+                let gesture = if drag.moving {
+                    Gesture::Drop
+                } else {
+                    let tolerance = unsafe {
+                        [
+                            GetSystemMetricsForDpi(SM_CXDOUBLECLK, drag.dpi) as u32 / 2,
+                            GetSystemMetricsForDpi(SM_CYDOUBLECLK, drag.dpi) as u32 / 2,
+                        ]
+                    };
+                    Gesture::Click(Instant::now(), [drag.start.x, drag.start.y], tolerance)
+                };
+                let _ = callback.proxy.send_event(AppEvent::Gesture(gesture));
+            }
+        }
+        WM_MOUSEMOVE | WM_CANCELMODE | WM_CAPTURECHANGED if callback.drag.take().is_some() => {
+            let _ = callback
+                .proxy
+                .send_event(AppEvent::Gesture(Gesture::Cancel));
         }
         _ => {}
     }
