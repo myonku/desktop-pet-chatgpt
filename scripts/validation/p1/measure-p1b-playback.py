@@ -95,15 +95,15 @@ class GpuCounters:
         self.pdh.PdhCloseQuery(self.query)
 
 
-def measure(exe, pack, variant, warmup, duration, log, process_factory, page_sizes, reference,
+def measure(exe, config, variant, warmup, duration, log, process_factory, page_sizes, reference,
             gpu_factory):
-    env = dict(os.environ, DESKTOP_PET_PACK=str(pack.resolve()),
-               DESKTOP_PET_FORMAT=variant, DESKTOP_PET_TRACE="1")
+    env = dict(os.environ, DESKTOP_PET_FORMAT=variant, DESKTOP_PET_TRACE="1")
     if variant == "ffmpeg":
         env.update(DESKTOP_PET_REFERENCE_FFMPEG=str(reference[0].resolve()),
                    DESKTOP_PET_REFERENCE_VIDEO=str(reference[1].resolve()))
     started = time.perf_counter()
-    with subprocess.Popen([str(exe.resolve())], env=env, stdout=subprocess.DEVNULL,
+    with subprocess.Popen([str(exe.resolve()), "--dev-config", str(config.resolve())],
+                          env=env, stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE, text=True, encoding="utf-8",
                           errors="replace") as child:
         lines = queue.Queue()
@@ -271,6 +271,9 @@ def main():
             parser.error("--video does not match a source hash in the pack")
     page_sizes = [page["size"] for page in manifest["pages"]]
     samples = {variant: [] for variant in args.formats}
+    config = args.output / "desktop-pet.dev.toml"
+    pack_path = json.dumps(args.pack.resolve().as_posix(), ensure_ascii=False)
+    config.write_text(f"initial_scale_percent = 100\npack_path = {pack_path}\n", encoding="utf-8")
     metadata = dict(pack=str(args.pack), manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
                     exe_sha256=hashlib.sha256(args.exe.read_bytes()).hexdigest(),
                     warmup=args.warmup, seconds=args.seconds, rounds=args.rounds, formats=args.formats)
@@ -281,7 +284,7 @@ def main():
         order = list(samples)
         for variant in order[i % len(order):] + order[:i % len(order)]:
             with (args.output / f"{i+1:02d}-{variant}.log").open("x", encoding="utf-8") as log:
-                result = measure(args.exe, args.pack, variant, args.warmup, args.seconds,
+                result = measure(args.exe, config, variant, args.warmup, args.seconds,
                                  log, process_factory, page_sizes, (args.ffmpeg, args.video),
                                  GpuCounters if args.gpu_metrics else None)
             samples[variant].append(result)

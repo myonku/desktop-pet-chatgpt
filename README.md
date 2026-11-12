@@ -10,9 +10,9 @@
 cargo run --locked
 ```
 
-默认显示内置透明色阶样本。按住可见区域拖动，右键打开菜单，可打开独立的中文输入预览窗口。开启鼠标穿透后，使用系统托盘里的 Desktop Pet ChatGPT 菜单恢复交互或退出。
+有可用素材包时播放包内动画，否则显示内置透明色阶样本。按住可见区域拖动，右键打开菜单，可打开独立的中文输入预览窗口。开启鼠标穿透后，使用系统托盘里的 Desktop Pet ChatGPT 菜单恢复交互或退出。
 
-可在启动前将 `DESKTOP_PET_PACK` 指向包含 `manifest.json` 的本地解包目录。`DESKTOP_PET_FORMAT` 默认为 `png`，可选 `rgba8` 或 `bc7`。合成包验证、素材工作区和附件装配见 [G-05](docs/G-05-contracts.md)。
+本地开发时可复制 `desktop-pet.example.toml` 为 `desktop-pet.dev.toml`，在其中设置初始缩放和素材包目录，再用 `cargo run --locked -- --dev-config desktop-pet.dev.toml` 启动。普通启动从用户 `config.json` 读取同名字段。素材格式默认 PNG；开发时仍可通过 `DESKTOP_PET_FORMAT` 选择 `rgba8` 或 `bc7`。配置示例和素材验证见 [G-05](docs/G-05-contracts.md#配置分层)。
 
 ## 文档索引
 

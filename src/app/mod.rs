@@ -1,3 +1,4 @@
+mod config;
 mod launch;
 
 use std::{error::Error, io, sync::Arc, thread, time::Instant};
@@ -31,6 +32,7 @@ pub(crate) enum AppEvent {
 }
 
 struct App {
+    options: launch::LaunchOptions,
     scene: Option<Scene>,
     preview: Option<Preview>,
     proxy: EventLoopProxy<AppEvent>,
@@ -58,8 +60,10 @@ struct PlaybackTrace {
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
+    let options = launch::LaunchOptions::load()?;
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let mut app = App {
+        options,
         scene: None,
         preview: None,
         proxy: event_loop.create_proxy(),
@@ -76,10 +80,12 @@ impl Scene {
     fn open(
         event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<AppEvent>,
+        options: &launch::LaunchOptions,
     ) -> Result<Self, Box<dyn Error>> {
+        let side = options.startup.side_dip;
         let attributes = Window::default_attributes()
             .with_title("Desktop Pet ChatGPT — P1")
-            .with_inner_size(LogicalSize::new(256, 256))
+            .with_inner_size(LogicalSize::new(side, side))
             .with_decorations(false)
             .with_resizable(false)
             .with_active(false)
@@ -96,11 +102,10 @@ impl Scene {
             window.inner_size()
         );
         let sample = Placeholder::load()?;
-        let options = launch::LaunchOptions::from_env();
         let mut input = WindowInput::new(&window, proxy.clone(), options.trace_input)?;
         input.apply_hit_region(sample.view())?;
         let variant = options.variant;
-        let root = options.pack;
+        let root = options.startup.pack_path.clone();
         let wants_bc7 = root.is_some() && variant == Variant::Bc7;
         let renderer = pollster::block_on(Renderer::new(
             Arc::clone(&window),
@@ -315,7 +320,7 @@ impl App {
 impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.scene.is_none() {
-            match Scene::open(event_loop, self.proxy.clone()) {
+            match Scene::open(event_loop, self.proxy.clone(), &self.options) {
                 Ok(scene) => self.scene = Some(scene),
                 Err(error) => {
                     self.error = Some(error);
