@@ -2,6 +2,7 @@ mod assets;
 mod behavior;
 mod config;
 mod launch;
+mod migration;
 mod settings;
 
 use std::{
@@ -96,6 +97,10 @@ struct PlaybackTrace {
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if !args.is_empty() {
+        return migration::run(&args);
+    }
     let profile = user_profile()?;
     let Some(instance) = Instance::acquire(&profile.root)? else {
         return Ok(());

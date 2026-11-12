@@ -64,6 +64,14 @@ pub struct Instance {
 
 impl Instance {
     pub fn acquire(root: &Path) -> windows::core::Result<Option<Self>> {
+        Self::open(root, true)
+    }
+
+    pub fn acquire_for_migration(root: &Path) -> windows::core::Result<Option<Self>> {
+        Self::open(root, false)
+    }
+
+    fn open(root: &Path, activate_existing: bool) -> windows::core::Result<Option<Self>> {
         let digest = Sha256::digest(root.as_os_str().to_string_lossy().to_lowercase().as_bytes());
         let name = format!("DesktopPetChatGPT.{digest:x}");
         let marker = wide(&name);
@@ -72,6 +80,10 @@ impl Instance {
         unsafe {
             let handle = CreateMutexW(None, false, PCWSTR(mutex.as_ptr()))?;
             if GetLastError() == ERROR_ALREADY_EXISTS {
+                if !activate_existing {
+                    let _ = CloseHandle(handle);
+                    return Ok(None);
+                }
                 let mut search = FindInstance {
                     marker: PCWSTR(marker.as_ptr()),
                     window: HWND::default(),

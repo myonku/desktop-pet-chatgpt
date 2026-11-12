@@ -22,9 +22,6 @@ pub(super) struct LaunchOptions {
 
 impl LaunchOptions {
     pub fn load(root: PathBuf) -> io::Result<Self> {
-        if std::env::args_os().nth(1).is_some() {
-            return Err(io::Error::other("usage: desktop-pet-chatgpt"));
-        }
         let startup = StartupConfig::load(root)?;
         #[cfg(feature = "development")]
         let (variant, trace_playback, trace_input) = {

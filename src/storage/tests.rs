@@ -2,10 +2,10 @@ use std::os::windows::fs::OpenOptionsExt;
 
 use super::*;
 
-struct Profile(PathBuf);
+pub(super) struct Profile(pub(super) PathBuf);
 
 impl Profile {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let root = std::env::temp_dir().join(format!("desktop-pet-test-{}", file_suffix()));
         fs::create_dir(&root).unwrap();
         Self(root)

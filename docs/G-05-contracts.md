@@ -93,7 +93,7 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 | 产品偏好 | `%LOCALAPPDATA%/DesktopPetChatGPT/config.toml` | 用户可选的启动值与设置偏好 |
 | 开发配置 | 启动工作目录的 `desktop-pet.dev.toml` | 启用 Cargo feature `development` 时优先读取；文件缺失时读取产品配置 |
 
-两个文件共用 UTF-8 TOML 模型、解析器和校验规则，最多 64 KiB，接受 UTF-8 BOM。选定文件后由同一套内置默认值补全缺项，文件间不合并。默认构建只读取产品配置，开发配置和开发诊断参数仅在显式启用相应 feature 的构建中生效。可从 [desktop-pet.example.toml](../desktop-pet.example.toml) 复制模板。旧 `config.json` 保留原样，显式旧数据导入由 P2-03 处理。
+两个文件共用 UTF-8 TOML 模型、解析器和校验规则，最多 64 KiB，接受 UTF-8 BOM。选定文件后由同一套内置默认值补全缺项，文件间不合并。默认构建只读取产品配置，开发配置和开发诊断参数仅在显式启用相应 feature 的构建中生效。可从 [desktop-pet.example.toml](../desktop-pet.example.toml) 复制模板。旧 `config.json` 由[显式迁移](#旧数据迁移)读取。
 
 | 字段 | 规则 |
 | --- | --- |
@@ -109,6 +109,23 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 产品设置中的「应用并保存」提交确认值，关闭窗口撤销预览。未改动大小时保留首次尺寸推导策略。「恢复默认设置」清除已保存的尺寸、素材包等偏好。写入使用同目录独立临时文件，刷盘后替换正式文件。开发配置生效时，设置只应用到本次运行。登录自启使用当前 Windows 用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 中的 `DesktopPetChatGPT` 项，注册值是带引号的绝对 EXE 路径。仅真实用户目录的产品设置确认或恢复默认会修改该项。配置替换失败时尝试恢复原注册值并报告回滚错误。
 
 开发构建的诊断脚本可用 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE` 和 `DESKTOP_PET_TRACE_INPUT` 提供缺省诊断参数，`[development]` 中同名功能的显式设置优先。`p1b-reference` 包含 `development`，另允许 `DESKTOP_PET_REFERENCE_*`。例如 `DESKTOP_PET_REFERENCE_CLIENT=320,x,y` 固定窗口，`auto,x,y` 和 `dip,x,y` 用于指定目标屏。
+
+## 旧数据迁移
+
+使用 `desktop-pet-chatgpt.exe migrate` 查看命令。迁移独立运行，要求同一用户目录下的桌宠已退出。迁移始终以产品用户目录为目标，普通启动只读取已经生成的产品配置。
+
+| 子命令 | 来源与转换 |
+| --- | --- |
+| `config-json [path]` | 默认读取 `%LOCALAPPDATA%/DesktopPetChatGPT/config.json`。支持上一阶段 schema 1 的 JSON 字段，并按当前产品规则校验。异目录导入会把相对素材路径解析至源配置目录 |
+| `bailong-preferences` | 只读取当前用户的 `HKCU\Software\BailongPet\DesktopPet`。导入已保存的桌宠与气泡比例、自移动、全屏隐藏、声音和任务气泡开关。按旧版规则限制比例，未设置项采用产品默认值 |
+| `bailong-history [path]` | 默认读取 `%LOCALAPPDATA%/BailongPet/conversations.json`。如有 `BAILONG_DATA_DIR` 则使用该目录，显式传入文件时使用指定路径。读取旧版会话数组，生成独立的会话快照 |
+| `rollback <migration-id>` | 核验该次原件备份和生成文件的哈希，将仍与导入结果一致的目标移入该备份的 `rolled-back` 项 |
+
+配置导入以 `config.toml` 为目标。历史存入 `history/legacy-bailong-codex/<session-id>.json`，文件名取旧会话 ID 的 SHA-256。正文、结果、事件、公开摘要和旧线程标识随会话归档。未确认完成的状态转为 `interrupted`，保留原状态。真实会话恢复、历史界面和通知水位随 P3 实现。迁移命令只输出状态、迁移 ID 和脱敏错误。
+
+每次导入把原始文件字节或已读取注册表值的类型与原始字节写入 `backups/migrations/<migration-id>/source.json`。解析或校验失败时保留该备份。已生成的迁移凭据 `receipt.json` 记录版本、来源 SHA-256 和输出哈希。新目标经原子移动发布，重读验证后写入 `applied` 标记。原始偏好文件、注册表和历史文件全程只读。
+
+同一来源内容的重试使用同一迁移 ID，配置导入还将原目录计入 ID，以保留相对路径语义。已有配置或已存在的旧历史命名空间由当前数据占用，导入会报告冲突。若导入在发布前或写入完成标记前中断，同一命令可重试。回滚会保留被编辑、缺失或有新增文件的目标。同一已回滚的迁移继续保留回滚状态。配置源与转换结果各限 64 KiB，历史源限 64 MiB，转换后单会话限 16 MiB。
 
 ## 源码、程序与素材附件
 

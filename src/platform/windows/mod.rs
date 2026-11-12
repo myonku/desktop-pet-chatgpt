@@ -35,7 +35,7 @@ mod display;
 mod preferences;
 mod session;
 pub use display::{Display, physical_size};
-pub use preferences::{Autostart, Sound, startup_command};
+pub use preferences::{Autostart, LegacyPreferences, Sound, legacy_preferences, startup_command};
 pub use session::{
     Instance, confirm_config_reset, local_path, reveal_directory, show_config_error, user_profile,
 };

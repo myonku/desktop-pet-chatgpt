@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::preferences::{Preferences, SIZE_RANGE, SavedSize};
 
+pub mod migration;
+
 const SCHEMA_VERSION: u32 = 1;
 const CONFIG_LIMIT: u64 = 64 * 1024;
 static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
@@ -71,6 +73,16 @@ impl Default for Config {
 }
 
 impl Config {
+    fn encode(&self) -> io::Result<Vec<u8>> {
+        let data = toml_edit::ser::to_string_pretty(self)
+            .map_err(io::Error::other)?
+            .into_bytes();
+        if data.len() as u64 > CONFIG_LIMIT {
+            return Err(invalid("configuration exceeds 64 KiB"));
+        }
+        Ok(data)
+    }
+
     fn validate(&self, development_file: bool) -> io::Result<()> {
         #[cfg(feature = "development")]
         if self.development.is_some() && !development_file {
@@ -170,12 +182,7 @@ impl ConfigStore {
         if read_snapshot(&self.file)? != self.snapshot {
             return Err(io::Error::other("配置文件已在外部更改，请重启后再保存。"));
         }
-        let data = toml_edit::ser::to_string_pretty(config)
-            .map_err(io::Error::other)?
-            .into_bytes();
-        if data.len() as u64 > CONFIG_LIMIT {
-            return Err(invalid("configuration exceeds 64 KiB"));
-        }
+        let data = config.encode()?;
         let backup = if let (Some(_), Some(original)) = (&self.problem, &self.snapshot) {
             let folder = self.root().join("backups");
             fs::create_dir_all(&folder)?;

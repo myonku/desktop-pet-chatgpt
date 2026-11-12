@@ -23,6 +23,18 @@ cargo run --locked --features development
 
 单击角色可互动，按住可见区域可拖动，靠近工作区左右边缘松手可吸附。右键和托盘共用菜单，可预览动作、切换音效、自移动和隐藏状态，或打开设置。设置支持实时预览、保存、恢复默认和 Windows 登录自启。开启鼠标穿透后，可从系统托盘菜单恢复交互或退出。
 
+## 导入旧版数据
+
+退出桌宠后，在 PowerShell 运行相应的导入命令。上一阶段的 JSON 偏好和白龙桌宠的注册表偏好都写入新 `config.toml`，可按来源选择其中一项。历史可独立导入。
+
+```powershell
+.\desktop-pet-chatgpt.exe migrate config-json
+.\desktop-pet-chatgpt.exe migrate bailong-preferences
+.\desktop-pet-chatgpt.exe migrate bailong-history
+```
+
+导入保留原件，遇到已有目标时会报告冲突。命令返回的迁移 ID 可用于 `migrate rollback <migration-id>`。支持的来源、备份位置及回滚规则见 [G-05](docs/G-05-contracts.md#旧数据迁移)。
+
 ## 文档索引
 
 | 常驻文档 | 维护范围 |

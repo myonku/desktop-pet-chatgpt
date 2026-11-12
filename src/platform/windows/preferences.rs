@@ -1,4 +1,4 @@
-use std::{io, os::windows::ffi::OsStrExt, path::Path};
+use std::{collections::BTreeMap, io, os::windows::ffi::OsStrExt, path::Path};
 
 use windows::{
     Win32::{
@@ -11,6 +11,50 @@ use windows::{
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const VALUE: PCWSTR = w!("DesktopPetChatGPT");
+const LEGACY_SETTINGS: PCWSTR = w!("Software\\BailongPet\\DesktopPet");
+
+pub type LegacyPreferences = BTreeMap<String, (u32, Vec<u8>)>;
+
+pub fn legacy_preferences() -> io::Result<LegacyPreferences> {
+    read_legacy_preferences(LEGACY_SETTINGS)
+}
+
+fn read_legacy_preferences(path: PCWSTR) -> io::Result<LegacyPreferences> {
+    let mut key = Key(HKEY::default());
+    let result = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path, 0, KEY_QUERY_VALUE, &mut key.0) };
+    if result == ERROR_FILE_NOT_FOUND {
+        return Ok(BTreeMap::new());
+    }
+    result.ok().map_err(io::Error::other)?;
+    let mut values = BTreeMap::new();
+    for (name, value) in [
+        ("sizePercent", w!("sizePercent")),
+        ("bubblePercent", w!("bubblePercent")),
+        ("taskBubblesDisabled", w!("taskBubblesDisabled")),
+        ("soundDisabled", w!("soundDisabled")),
+        ("autoHideFullscreen", w!("autoHideFullscreen")),
+        ("autoMovementDisabled", w!("autoMovementDisabled")),
+    ] {
+        let mut kind = REG_VALUE_TYPE::default();
+        let mut bytes = [0; 256];
+        let mut len = bytes.len() as u32;
+        let result = unsafe {
+            RegQueryValueExW(
+                key.0,
+                value,
+                None,
+                Some(&mut kind),
+                Some(bytes.as_mut_ptr()),
+                Some(&mut len),
+            )
+        };
+        if result != ERROR_FILE_NOT_FOUND {
+            result.ok().map_err(io::Error::other)?;
+            values.insert(name.to_owned(), (kind.0, bytes[..len as usize].to_vec()));
+        }
+    }
+    Ok(values)
+}
 
 pub struct Autostart {
     key: PCWSTR,
