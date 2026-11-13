@@ -7,7 +7,8 @@ default-run = "desktop-pet-chatgpt"
 
 [features]
 development = []
-p1b-reference = ["development"]
+ffmpeg-decoder = ["development"]
+window-diagnostics = []
 
 [dependencies]
 bcdec_rs = "=0.2.0"

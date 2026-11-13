@@ -27,7 +27,7 @@ fn cancelled_generation_rejects_old_completion_and_releases_request_slot() {
         generation: Arc::new(AtomicU64::new(0)),
         id: 42,
         pending: Some(0),
-        #[cfg(feature = "p1b-reference")]
+        #[cfg(feature = "ffmpeg-decoder")]
         decoder_process: None,
     };
     source.cancel();
@@ -57,7 +57,7 @@ fn page_source_rejects_wrong_instance_without_releasing_current_request() {
         generation: Arc::new(AtomicU64::new(0)),
         id: 42,
         pending: Some(0),
-        #[cfg(feature = "p1b-reference")]
+        #[cfg(feature = "ffmpeg-decoder")]
         decoder_process: None,
     };
     assert!(
@@ -93,7 +93,7 @@ fn test_player() -> (Playback, mpsc::Receiver<Request>) {
             generation: Arc::new(AtomicU64::new(0)),
             id: 42,
             pending: None,
-            #[cfg(feature = "p1b-reference")]
+            #[cfg(feature = "ffmpeg-decoder")]
             decoder_process: None,
         },
         actions: vec![

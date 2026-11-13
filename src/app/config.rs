@@ -13,16 +13,24 @@ pub(super) struct StartupConfig {
 }
 
 impl StartupConfig {
-    pub fn load(root: PathBuf) -> io::Result<Self> {
-        if cfg!(feature = "development") {
-            let (store, config) =
-                ConfigStore::load(env::current_dir()?.join("desktop-pet.dev.toml"), true);
-            if !store.is_missing() {
-                return Self::from_store(store, config, true);
-            }
+    pub fn default_pack(&self) -> io::Result<PathBuf> {
+        if self.development {
+            return Ok(self.store.root().join("assets/packs/white-dragon/0.1.0"));
         }
-        let (store, config) = ConfigStore::load(root.join("config.toml"), false);
-        Self::from_store(store, config, false)
+        Ok(env::current_exe()?
+            .with_file_name("resources")
+            .join("default"))
+    }
+
+    pub fn load(root: PathBuf) -> io::Result<Self> {
+        let development = cfg!(feature = "development");
+        let name = if development {
+            "desktop-pet.dev.toml"
+        } else {
+            "config.toml"
+        };
+        let (store, config) = ConfigStore::load(root.join(name), development);
+        Self::from_store(store, config, development)
     }
 
     fn from_store(

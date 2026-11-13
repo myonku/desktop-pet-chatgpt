@@ -116,6 +116,8 @@ impl SettingsWindow {
                         );
                         ui.checkbox(&mut draft.preferences.auto_move, "自移动");
                         ui.checkbox(&mut draft.preferences.fullscreen_hide, "当前屏全屏时隐藏");
+                        ui.checkbox(&mut draft.preferences.start_hidden, "启动时隐藏桌宠")
+                            .on_hover_text("下次启动生效。可从系统托盘显示桌宠。");
                         ui.add_enabled(
                             tray || draft.preferences.passthrough,
                             egui::Checkbox::new(
@@ -208,7 +210,7 @@ impl SettingsWindow {
         if !layout.is_empty() && layout != self.last_layout {
             for (key, rect) in &layout {
                 eprintln!(
-                    "P2 settings control: {key} {:.2} {:.2} {:.2} {:.2}",
+                    "Settings control: {key} {:.2} {:.2} {:.2} {:.2}",
                     rect.left(),
                     rect.top(),
                     rect.right(),

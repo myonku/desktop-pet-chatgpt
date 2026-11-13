@@ -70,7 +70,7 @@ impl Scene {
             && display.is_some_and(|display| self.input.fullscreen(display));
         self.apply_visibility(now);
 
-        if self.reference_geometry
+        if self.fixed_geometry
             || self.input.gesture_in_progress()
             || self.pet.activity == Activity::Drag
         {
@@ -132,7 +132,7 @@ impl Scene {
         match click {
             Click::Quota => {
                 if self.trace.is_some() {
-                    eprintln!("P2 quota: connection required");
+                    eprintln!("Quota: connection required");
                 }
                 self.input.connection_hint();
             }
@@ -183,7 +183,7 @@ impl Scene {
                     let threshold = (16.0 * self.window.scale_factor()).round() as i32;
                     self.pet.edge = display.work.snap(point[0], size[0], threshold);
                     if self.trace.is_some() {
-                        eprintln!("P2 drop: {:?} at {point:?}", self.pet.edge);
+                        eprintln!("Drop: {:?} at {point:?}", self.pet.edge);
                     }
                 }
                 self.finish(now);

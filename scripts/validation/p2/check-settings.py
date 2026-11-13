@@ -8,18 +8,15 @@ import json
 import os
 from pathlib import Path
 import re
-import runpy
 import shutil
 import subprocess
 import time
 import tomllib
 
-native = runpy.run_path(str(Path(__file__).with_name("check-windows.py")))
-U, K = native["U"], native["K"]
-bounds, click, displays = (native[key] for key in ("bounds", "click", "displays"))
-find_window, menu, message, require, wait = (
-    native[key] for key in ("find_window", "menu", "message", "require", "wait")
+from windows_desktop import (
+    K, U, activate, bounds, click, displays, find_window, fullscreen, menu, message, require, wait,
 )
+
 U.GetClientRect.argtypes = [w.HWND, c.POINTER(w.RECT)]
 U.ClientToScreen.argtypes = [w.HWND, c.POINTER(w.POINT)]
 U.GetCursorPos.argtypes = [c.POINTER(w.POINT)]
@@ -35,7 +32,7 @@ K.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, w.LPVOID, w.DWORD, w.DWOR
 K.CreateFileW.restype = w.HANDLE
 K.CloseHandle.argtypes = [w.HANDLE]
 SETTINGS = "桌宠 · 设置"
-RESOURCE_TRACE = re.compile(r'^P2 resources: Some\("([0-9a-f]+)"\) Some\("([0-9a-f]+)"\) Some\("([0-9a-f]+)"\)', re.M)
+RESOURCE_TRACE = re.compile(r'^Asset resources: Some\("([0-9a-f]+)"\) Some\("([0-9a-f]+)"\) Some\("([0-9a-f]+)"\)', re.M)
 
 
 class Profile:
@@ -80,12 +77,13 @@ class Pet:
                                        capture_output=True, timeout=10)
             require(duplicate.returncode == 0, "second launch exits without creating a pet")
         hwnd = self.settings()
-        self.until("P2 settings control: scale", mark)
+        self.until("Settings control: scale", mark)
         time.sleep(0.12)
         return hwnd
 
     def control(self, hwnd, name, proportion=0.5):
-        pattern = rf"^P2 settings control: {name} ([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)"
+        activate(hwnd)
+        pattern = rf"^Settings control: {name} ([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)"
         coordinates = wait(lambda: re.findall(pattern, self.text(), re.M), f"layout of {name}")
         left, top, right, bottom = map(float, coordinates[-1])
         dpi = U.GetDpiForWindow(hwnd) / 96
@@ -108,15 +106,22 @@ class Pet:
             def send(msg, flags=0):
                 require(U.SendMessageTimeoutW(hwnd, msg, flags, packed, 2, 1000, c.byref(result)),
                         f"send mouse message {msg:#x} to settings window")
-            time.sleep(0.07)
-            send(0x200)
-            send(0x201, 1)
-            time.sleep(0.08)
-            send(0x202)
-            time.sleep(0.14)
             action = {"save": "Save", "reset": "Reset", "exit": "Exit",
                       "test_sound": "PlaySound"}.get(name, "Preview")
-            self.until(f"P2 settings action: {action}", mark)
+            marker = f"Settings action: {action}"
+            for attempt in range(3):
+                time.sleep(0.07)
+                send(0x200)
+                send(0x201, 1)
+                time.sleep(0.08)
+                send(0x202)
+                try:
+                    wait(lambda: marker in self.text()[mark:], marker, timeout=2)
+                    time.sleep(0.14)
+                    break
+                except AssertionError:
+                    if attempt == 2:
+                        raise
         finally:
             actual = w.POINT()
             if U.GetCursorPos(c.byref(actual)) and (actual.x, actual.y) == (point.x, point.y):
@@ -127,8 +132,9 @@ class Pet:
         wait(lambda: not U.IsWindow(hwnd), "settings closed")
 
     def side(self):
-        left, _, right, _ = bounds(self.hwnd)
-        return right - left
+        rect = w.RECT()
+        require(U.GetClientRect(self.hwnd, c.byref(rect)), "read pet client size")
+        return rect.right
 
     def passthrough(self):
         return bool(U.GetWindowLongW(self.hwnd, -20) & 0x20)
@@ -141,7 +147,7 @@ class Pet:
 def launch_env(profile):
     b = displays()[0].work
     return dict(os.environ, LOCALAPPDATA=str(profile.root), DESKTOP_PET_TRACE="1",
-                DESKTOP_PET_FORMAT="png", DESKTOP_PET_REFERENCE_CLIENT=f"auto,{b.left + 210},{b.top + 160}")
+                DESKTOP_PET_FORMAT="png", DESKTOP_PET_WINDOW_GEOMETRY=f"auto,{b.left + 210},{b.top + 160}")
 
 
 def launch(exe, profile, log, cwd=None):
@@ -157,7 +163,7 @@ def answer_config_dialog(proc, choice):
 
 
 @contextmanager
-def pet_process(exe, profile, log, cwd=None, answer=None):
+def pet_process(exe, profile, log, cwd=None, answer=None, start_hidden=False):
     proc = launch(exe, profile, log, cwd)
     pet = None
     try:
@@ -165,6 +171,11 @@ def pet_process(exe, profile, log, cwd=None, answer=None):
             answer_config_dialog(proc, answer)
         hwnd = wait(lambda: find_window(proc.pid), "pet window", timeout=12)
         pet = Pet(proc, log, hwnd, exe, profile)
+        if start_hidden:
+            pet.until("Window: DPI scale")
+            require(not U.IsWindowVisible(hwnd), "start_hidden did not keep the pet hidden")
+            require("First asset frame presented" not in pet.text(), "hidden startup presented a frame")
+            menu(hwnd, "H", tray=True)
         pet.until("First asset frame presented")
         yield pet
     finally:
@@ -177,6 +188,18 @@ def pet_process(exe, profile, log, cwd=None, answer=None):
                 proc.terminate()
                 proc.wait(timeout=5)
     require(proc.returncode == 0, f"pet exit code {proc.returncode}: {log}")
+
+
+def startup_visibility(exe, profile, output):
+    profile.write({"preferences": {"start_hidden": True, "fullscreen_hide": False}})
+    original = profile.config.read_bytes()
+    for name in ("start-hidden", "restart-hidden"):
+        with pet_process(exe, profile, output / f"{name}.log", start_hidden=True) as pet:
+            require(U.IsWindowVisible(pet.hwnd), "tray did not restore the hidden pet")
+            with fullscreen(displays()[0]):
+                time.sleep(0.5)
+                require(U.IsWindowVisible(pet.hwnd), "fullscreen_hide=false ignored")
+        require(profile.config.read_bytes() == original, "manual show changed startup preference")
 
 
 def settings_roundtrip(exe, profile, dawn, dusk, output):
@@ -196,7 +219,7 @@ def settings_roundtrip(exe, profile, dawn, dusk, output):
         pet.control(hwnd, "task_bubbles")
         offset = len(pet.text())
         pet.control(hwnd, "test_sound")
-        pet.until("P2 sound: interaction.click (settings)", offset)
+        pet.until("Sound: interaction.click (settings)", offset)
         original_settings_bounds = bounds(hwnd)
         pet.control(hwnd, "scale", 0.03)
         wait(lambda: pet.side() != original_side, "live pet resize")
@@ -209,17 +232,18 @@ def settings_roundtrip(exe, profile, dawn, dusk, output):
         pet.control(hwnd, "scale", 0.03)
         pet.control(hwnd, "sound")
         pet.control(hwnd, "task_bubbles")
-        preview_side = pet.side()
         pet.control(hwnd, "save")
         saved = wait(lambda: (value := profile.read())["preferences"].get("sound") is False and value, "saved settings")
         require(saved["saved_size"]["base_dip"] == 240 and saved["saved_size"]["percent"] != 110
                 and saved["preferences"]["task_bubbles"] is False, "saved size and independent toggles")
+        preview_side = round(saved["saved_size"]["base_dip"] * saved["saved_size"]["percent"] / 100 * dpi / 96)
+        wait(lambda: pet.side() == preview_side, "saved size settles in the preview")
         pet.close_settings(hwnd)
         require(pet.side() == preview_side, "Apply did not retain the previewed size")
         offset = len(pet.text())
         click(pet.hwnd)
         time.sleep(0.4)
-        require("P2 sound: interaction.click" not in pet.text()[offset:], "muted click emitted sound")
+        require("Sound: interaction.click" not in pet.text()[offset:], "muted click emitted sound")
 
         menu(pet.hwnd, "P", tray=True)
         wait(pet.passthrough, "mouse passthrough enabled")
@@ -232,7 +256,7 @@ def settings_roundtrip(exe, profile, dawn, dusk, output):
         dusk_resources = pet.resources()
         require(all(left != right for left, right in zip(dawn_resources, dusk_resources)),
                 "image, click sound and generic name must all come from the new pack")
-        require(pet.side() == preview_side, "saved resize did not survive restart")
+        wait(lambda: pet.side() == preview_side, "saved resize survives restart")
         require(pet.passthrough(), "saved passthrough did not survive restart")
         menu(pet.hwnd, "P", tray=True)
         wait(lambda: not pet.passthrough(), "tray must restore mouse interaction")
@@ -287,7 +311,7 @@ def recovery(exe, profile, output):
             pet.control(hwnd, "sound")
             mark = len(pet.text())
             pet.control(hwnd, "save")
-            pet.until("P2 settings error:", mark)
+            pet.until("Settings error:", mark)
             require(profile.config.read_bytes() == original, "failed atomic replacement modified original")
             require(not list(profile.config.parent.glob(".config-*.tmp")), "staged file leaked")
             pet.close_settings(hwnd)
@@ -295,25 +319,42 @@ def recovery(exe, profile, output):
             K.CloseHandle(handle)
 
 
-def dev_isolation(exe, profile, dawn, output):
-    profile.write({"schema_version": 1, "saved_size": {"base_dip": 240, "percent": 110}})
+def dev_isolation(exe, product_exe, profile, dawn, dusk, output):
+    profile.write({"schema_version": 1, "saved_size": {"base_dip": 240, "percent": 110},
+                   "pack_path": dusk.as_posix()})
     original = profile.config.read_bytes()
     dev = profile.root / "desktop-pet.dev.toml"
+    shutil.copytree(dawn, profile.root / "assets/packs/white-dragon/0.1.0")
+    with pet_process(exe, profile, output / "dev-without-config.log") as pet:
+        require("initial DIP 264.00" not in pet.text(), "missing dev TOML loaded the product size")
+        pet.until("Asset playback: dawn")
+        hwnd = pet.open_settings()
+        pet.control(hwnd, "sound")
+        pet.control(hwnd, "save")
+        require(profile.config.read_bytes() == original, "missing dev TOML redirected save to product")
+        require(not dev.exists(), "development Apply created a configuration file")
+
     dev.write_text(f"initial_scale_percent = 100\npack_path = {json.dumps(dawn.as_posix(), ensure_ascii=False)}\n",
                    encoding="utf-8")
     development = dev.read_bytes()
     with pet_process(exe, profile, output / "dev.log") as pet:
-        require("initial DIP 264.00" not in pet.text(), "development TOML has priority over saved size")
+        require("initial DIP 264.00" not in pet.text(), "development launch used product size")
         hwnd = pet.open_settings()
         pet.control(hwnd, "sound")
         pet.control(hwnd, "save")
         require(profile.config.read_bytes() == original, "development Apply wrote product preferences")
         require(dev.read_bytes() == development, "development Apply wrote development preferences")
 
+    with pet_process(product_exe, profile, output / "product-with-dev-config.log") as pet:
+        pet.until("initial DIP 264.00")
+        pet.until("Asset playback: dusk")
+        require(dev.read_bytes() == development, "product launch modified development preferences")
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--exe", type=Path, required=True, help="Windows Release with p1b-reference")
+    parser.add_argument("--exe", type=Path, required=True, help="Windows Release with window-diagnostics")
+    parser.add_argument("--dev-exe", type=Path, required=True, help="Windows Release with development,window-diagnostics")
     parser.add_argument("--packs", type=Path, required=True, help="P1 fixture directory containing dawn and dusk")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -326,10 +367,14 @@ def main():
     shutil.copytree(dawn, output / "resources/default")
     report = settings_roundtrip(exe, Profile(output / "profile"), dawn, dusk, output)
     recovery(exe, Profile(output / "recovery-profile"), output)
-    dev_isolation(exe, Profile(output / "dev-profile"), dawn, output)
+    startup_visibility(exe, Profile(output / "visibility-profile"), output)
+    dev_exe = output / "development" / args.dev_exe.name
+    dev_exe.parent.mkdir()
+    shutil.copy2(args.dev_exe, dev_exe)
+    dev_isolation(dev_exe, exe, Profile(output / "dev-profile"), dawn, dusk, output)
     report["checks"] = ["single instance", "preview/apply/restart", "sound independence",
                         "tray passthrough", "resource swap", "reset/recovery", "default pack fallback",
-                        "locked config", "development isolation"]
+                        "locked config", "development isolation", "startup visibility and tray recovery"]
     (output / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
 

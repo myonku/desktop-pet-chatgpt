@@ -34,7 +34,8 @@ pub(super) fn config_json(bytes: &[u8], source_dir: &Path, profile: &Path) -> io
         saved_size: old.saved_size,
         pack_path: old.pack_path,
         preferences: old.preferences,
-        ..Config::default()
+        #[cfg(feature = "development")]
+        development: None,
     };
     config.validate(false)?;
     if source_dir != profile

@@ -1,4 +1,4 @@
-"""Assemble the local P2 representative pack from the legacy source manifest and WebM."""
+"""Assemble a local white-dragon v1 pack from the source manifest and WebM."""
 
 import argparse
 import hashlib
@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-IMPORT = Path(__file__).resolve().parents[1] / "p1/import-p1b-reference.py"
+IMPORT = Path(__file__).with_name("convert-vp9-action.py")
 MAPPING = (
     ("interact", "01"),
     ("move-left", "move02left"),
@@ -25,6 +25,8 @@ def main():
     parser.add_argument("--legacy-manifest", type=Path, required=True)
     parser.add_argument("--ffmpeg", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--pack-id", default="white-dragon")
+    parser.add_argument("--png-only", action="store_true")
     args = parser.parse_args()
     if args.output.exists():
         parser.error("output directory must not exist")
@@ -32,11 +34,11 @@ def main():
     items = {item["id"]: item for group in ("variants", "movementAnimations") for item in legacy[group]}
     items.update((legacy[key]["id"], legacy[key]) for key in ("idle", "dragAnimation", "landingAnimation"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=args.output.parent, prefix="p2-assemble-") as workspace:
+    with tempfile.TemporaryDirectory(dir=args.output.parent, prefix=".assemble-") as workspace:
         staging = Path(workspace)
         pack = staging / "assembled"
         pack.mkdir()
-        manifest = {"schema_version": 1, "pack_id": "white-dragon-p2-local", "pack_version": "0.1.0",
+        manifest = {"schema_version": 1, "pack_id": args.pack_id, "pack_version": "0.1.0",
                     "color_space": "sRGB", "alpha": "straight", "source_sha256": [],
                     "tools": {}, "pages": [], "actions": [], "resources": []}
         for action_id, original_id in MAPPING:
@@ -46,9 +48,12 @@ def main():
                 raise ValueError(f"unmapped render anchor: {original_id}")
             source = args.legacy_manifest.parent / old["playbackFile"]
             part = staging / action_id
-            subprocess.run([sys.executable, str(IMPORT), "--ffmpeg", str(args.ffmpeg),
-                            "--source", str(source), "--output", str(part),
-                            "--fps", str(fps), "--batch", "4", "--size", "320"], check=True)
+            command = [sys.executable, str(IMPORT), "--ffmpeg", str(args.ffmpeg),
+                       "--source", str(source), "--output", str(part),
+                       "--fps", str(fps), "--batch", "4", "--size", "320"]
+            if args.png_only:
+                command.append("--png-only")
+            subprocess.run(command, check=True)
             data = json.loads((part / "manifest.json").read_text(encoding="utf-8"))
             action = data["actions"][0]
             total_us = sum(frame["duration_us"] for frame in action["frames"])
@@ -65,6 +70,8 @@ def main():
             for page in data["pages"]:
                 page["id"] = f"{action_id}-{page['id']}"
                 for variant in ("png", "rgba8", "bc7"):
+                    if variant not in page:
+                        continue
                     payload = page[variant]
                     relative = f"{action_id}/{payload['path']}"
                     shutil.move(part / payload["path"], pack / relative)

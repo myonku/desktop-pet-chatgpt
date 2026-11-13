@@ -105,8 +105,19 @@ impl Snapshot {
             Kind::BailongHistory => return legacy::history(&self.bytes, id),
         };
         config.validate(false)?;
+        let data = config.encode()?;
+        let mut document = std::str::from_utf8(&data)
+            .map_err(io::Error::other)?
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(io::Error::other)?;
+        // Preserve the bytes and receipt hashes produced before this preference existed.
+        if !config.preferences.start_hidden
+            && let Some(preferences) = document["preferences"].as_table_mut()
+        {
+            preferences.remove("start_hidden");
+        }
         let mut bytes = format!("# migration_id = {id}\n").into_bytes();
-        bytes.extend(config.encode()?);
+        bytes.extend(document.to_string().into_bytes());
         if bytes.len() as u64 > CONFIG_LIMIT {
             return Err(invalid("转换后的配置超过 64 KiB。"));
         }

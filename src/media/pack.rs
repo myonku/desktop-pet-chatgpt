@@ -216,7 +216,7 @@ impl Pack {
         let (variant, payload) = match (variant, &page.bc7, &page.rgba8) {
             (Variant::Bc7, Some(bc7), _) => (Variant::Bc7, bc7),
             (Variant::Rgba8 | Variant::Bc7, _, Some(rgba8)) => (Variant::Rgba8, rgba8),
-            #[cfg(feature = "p1b-reference")]
+            #[cfg(feature = "ffmpeg-decoder")]
             (Variant::Ffmpeg, _, _) => return Err(invalid("FFmpeg needs the reference source")),
             _ => (Variant::Png, &page.png),
         };

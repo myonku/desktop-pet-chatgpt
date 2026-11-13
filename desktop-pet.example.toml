@@ -1,19 +1,32 @@
 # 产品配置放在 %LOCALAPPDATA%/DesktopPetChatGPT/config.toml。
-# 开发配置放在启动工作目录的 desktop-pet.dev.toml。
+# 开发配置只从启动工作目录的 desktop-pet.dev.toml 读取，缺失时使用内置默认值。
 # 在仓库根目录运行 cargo run --locked --features development。
 schema_version = 1
 
-# 相对显示器物理尺寸推导的基准，取值 50–200。探测不可用时基准为 256×256 DIP。
-initial_scale_percent = 70
+# 角色窗口缩放，50–200。无已保存尺寸时乘以显示器推导的基准；探测失败时基准为 256 DIP。
+initial_scale_percent = 100
 
-# 含 manifest.json 的包目录。相对路径以本配置文件所在目录为准。
-# pack_path = "artifacts/validation/p2/fixtures/p2-behavior"
+# 含 manifest.json 的包目录，相对路径以本配置文件所在目录为准。
+# 留空（省略键）时，开发配置默认使用 assets/packs/white-dragon/0.1.0，
+# 产品配置默认使用 EXE 同目录下的 resources/default。
+# pack_path = "assets/packs/white-dragon/0.1.0"
 
-# [preferences]
-# auto_move = true
-# sound = true
+[preferences]
+start_hidden = false       # 启动时隐藏角色，通过托盘显示；托盘不可用时保持可见。
+fullscreen_hide = true     # 角色所在屏幕的前台窗口全屏时自动隐藏。
+auto_move = true           # 自动移动。
+sound = true               # 互动及结果音效。
+passthrough = false        # 全窗口鼠标穿透；需要托盘恢复入口。
+task_bubbles = true        # 任务提醒气泡；实际通知在外部集成接入后生效。
+bubble_scale_percent = 100 # 任务气泡缩放，50–150。
 
-# 以下设置只用于开发构建读取的 desktop-pet.dev.toml。
+# 已保存尺寸优先于 initial_scale_percent。通常由设置窗口保存，需要时可手动填写。
+# [saved_size]
+# base_dip = 256.0
+# percent = 100
+
+# 以下字段只在开发构建读取的 desktop-pet.dev.toml 中有效。
+# 显式设置优先于诊断环境变量；希望由环境变量选择时保留注释。
 # [development]
 # format = "png"
 # trace_playback = false

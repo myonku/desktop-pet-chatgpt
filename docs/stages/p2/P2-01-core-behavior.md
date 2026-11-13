@@ -38,7 +38,7 @@
 
 ## 复测命令
 
-在仓库根运行。行为脚本使用交互桌面及自己的窗口，测试过程中会短暂显示测试菜单和全屏窗口。默认使用 PNG。
+在仓库根运行。行为脚本使用交互桌面及自己的窗口，测试过程中会短暂显示测试菜单和全屏窗口。默认使用 PNG。双屏独立复测见 [G-06](../../G-06-validation.md#多显示器专项)。
 
 ```powershell
 cargo fmt --all --check
@@ -47,23 +47,23 @@ cargo build --locked
 cargo build --release --locked
 cargo test --locked
 cargo test --locked --all-features
-cargo build --release --locked --features p1b-reference --target-dir target/reference
+cargo build --release --locked --features development,window-diagnostics --target-dir target/window-diagnostics
 python scripts/validation/p2/generate-fixtures.py
 $fixtures = 'artifacts/validation/p2/fixtures'
 $run = 'artifacts/validation/p2/runs/p2-01-recheck'
 target/release/validate-pack.exe --distribution "$fixtures/p2-behavior"
 target/release/validate-pack.exe --distribution "$fixtures/p2-idle-only"
-python scripts/validation/p2/check-windows.py --exe target/reference/release/desktop-pet-chatgpt.exe --fixtures $fixtures --output $run
+python scripts/validation/p2/check-windows.py --exe target/window-diagnostics/release/desktop-pet-chatgpt.exe --fixtures $fixtures --output $run
 ```
 
 代表包额外需要本地旧素材和 FFmpeg。示例使用本机保留的旧版工具，使用独立输出目录。
 
 ```powershell
 $env:PYTHONPATH = Join-Path $PWD 'artifacts/validation/p2/tools'
-python -m pip install --target "$env:PYTHONPATH" ispc_texcomp==1.0.1 texture2ddecoder==1.0.6
-python scripts/validation/p2/assemble-representative.py --legacy-manifest 'assets/source/white-dragon/白龙桌宠素材/素材清单.json' --ffmpeg '.legacy-v0.5.1/tools/ffmpeg.exe' --output "$fixtures/white-dragon-p2-local"
+python -m pip install --target "$env:PYTHONPATH" ispc_texcomp==1.0.1
+python scripts/assets/assemble-white-dragon.py --legacy-manifest 'assets/source/white-dragon/白龙桌宠素材/素材清单.json' --ffmpeg '.legacy-v0.5.1/tools/ffmpeg.exe' --pack-id white-dragon-p2-local --output "$fixtures/white-dragon-p2-local"
 target/release/validate-pack.exe --distribution "$fixtures/white-dragon-p2-local"
-python scripts/validation/p1/measure-p1b-playback.py --exe target/reference/release/desktop-pet-chatgpt.exe --pack "$fixtures/white-dragon-p2-local" --output "$run/representative" --formats png --rounds 1 --warmup 2 --seconds 3
+python scripts/validation/p1/measure-p1b-playback.py --exe target/window-diagnostics/release/desktop-pet-chatgpt.exe --pack "$fixtures/white-dragon-p2-local" --output "$run/representative" --formats png --rounds 1 --warmup 2 --seconds 3
 ```
 
 ## 本地结果

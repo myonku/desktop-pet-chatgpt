@@ -9,8 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(feature = "p1b-reference")]
-use super::reference::{Decoder, DecoderProcess};
+#[cfg(feature = "ffmpeg-decoder")]
+use super::ffmpeg::{Decoder, DecoderProcess};
 use super::{
     Direction, Pack, PagePixels, Variant,
     frame::{Canvas, FrameView},
@@ -39,35 +39,35 @@ struct FrameSource {
     generation: Arc<AtomicU64>,
     id: u64,
     pending: Option<u64>,
-    #[cfg(feature = "p1b-reference")]
+    #[cfg(feature = "ffmpeg-decoder")]
     decoder_process: Option<DecoderProcess>,
 }
 
 impl FrameSource {
     fn new(
         pack: Arc<Pack>,
-        #[cfg(feature = "p1b-reference")] mut decoder: Option<Decoder>,
+        #[cfg(feature = "ffmpeg-decoder")] mut decoder: Option<Decoder>,
         deliver: impl Fn(PageResult) -> bool + Send + 'static,
     ) -> io::Result<Self> {
         let (requests, receiver) = mpsc::sync_channel::<Request>(1);
         let generation = Arc::new(AtomicU64::new(0));
         let current = generation.clone();
         let id = NEXT_SOURCE.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "p1b-reference")]
+        #[cfg(feature = "ffmpeg-decoder")]
         let decoder_process = decoder.as_ref().map(Decoder::process);
         let worker = thread::Builder::new()
             .name("asset-page".into())
             .spawn(move || {
                 while let Ok(request) = receiver.recv() {
                     let cancelled = || current.load(Ordering::Relaxed) != request.generation;
-                    #[cfg(feature = "p1b-reference")]
+                    #[cfg(feature = "ffmpeg-decoder")]
                     let pixels = match &mut decoder {
                         Some(decoder) => {
                             decoder.load_page(request.index, request.generation, cancelled)
                         }
                         None => pack.load_page(request.index, request.variant, cancelled),
                     };
-                    #[cfg(not(feature = "p1b-reference"))]
+                    #[cfg(not(feature = "ffmpeg-decoder"))]
                     let pixels = pack.load_page(request.index, request.variant, cancelled);
                     let result = PageResult {
                         source: id,
@@ -90,7 +90,7 @@ impl FrameSource {
             generation,
             id,
             pending: None,
-            #[cfg(feature = "p1b-reference")]
+            #[cfg(feature = "ffmpeg-decoder")]
             decoder_process,
         })
     }
@@ -129,7 +129,7 @@ impl FrameSource {
 
     fn cancel(&self) {
         self.generation.fetch_add(1, Ordering::Relaxed);
-        #[cfg(feature = "p1b-reference")]
+        #[cfg(feature = "ffmpeg-decoder")]
         if let Some(process) = &self.decoder_process {
             process.stop();
         }
@@ -273,14 +273,14 @@ impl Playback {
             })
             .collect();
         let pack_id = manifest.pack_id.clone();
-        #[cfg(feature = "p1b-reference")]
+        #[cfg(feature = "ffmpeg-decoder")]
         let decoder = (variant == Variant::Ffmpeg)
             .then(|| Decoder::new(manifest))
             .transpose()?;
         Ok(Self {
             source: FrameSource::new(
                 pack,
-                #[cfg(feature = "p1b-reference")]
+                #[cfg(feature = "ffmpeg-decoder")]
                 decoder,
                 deliver,
             )?,

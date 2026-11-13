@@ -7,3 +7,4 @@
 !/artifacts/README.md
 /desktop-pet.dev.toml
 /backups/desktop-pet.dev-invalid-*.toml
+__pycache__/

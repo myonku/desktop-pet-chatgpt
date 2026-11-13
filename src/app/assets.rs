@@ -1,5 +1,5 @@
 use std::{
-    env, io,
+    io,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -19,13 +19,11 @@ use super::AppEvent;
 
 pub(super) fn load_startup_pack(
     configured: Option<&Path>,
+    default: PathBuf,
     variant: Variant,
     proxy: &EventLoopProxy<AppEvent>,
     renderer: &mut Renderer,
 ) -> io::Result<(PathBuf, LoadedPack, String)> {
-    let default = env::current_exe()?
-        .with_file_name("resources")
-        .join("default");
     let mut open = |root: &Path, variant| -> io::Result<LoadedPack> {
         let frames = proxy.clone();
         let pack = LoadedPack::open(root, variant, move |page| {
@@ -45,7 +43,7 @@ pub(super) fn load_startup_pack(
             }
         }
     }
-    #[cfg(feature = "p1b-reference")]
+    #[cfg(feature = "ffmpeg-decoder")]
     let variant = if variant == Variant::Ffmpeg {
         Variant::Png
     } else {
@@ -138,6 +136,6 @@ impl LoadedPack {
             .click_wave
             .as_ref()
             .map(|wave| format!("{:x}", Sha256::digest(wave)));
-        eprintln!("P2 resources: {poster:?} {wave:?} {name:?}");
+        eprintln!("Asset resources: {poster:?} {wave:?} {name:?}");
     }
 }

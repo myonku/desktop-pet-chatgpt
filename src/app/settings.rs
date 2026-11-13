@@ -47,7 +47,7 @@ impl Scene {
             && self.sound.play()
             && self.trace.is_some()
         {
-            eprintln!("P2 sound: interaction.click");
+            eprintln!("Sound: interaction.click");
         }
     }
 
@@ -160,7 +160,7 @@ impl App {
             return;
         };
         if scene.trace.is_some() {
-            eprintln!("P2 settings action: {action:?}");
+            eprintln!("Settings action: {action:?}");
         }
         let draft = settings.draft.clone();
         let result = match action {
@@ -174,7 +174,7 @@ impl App {
                 let scene = self.scene.as_mut().unwrap();
                 if scene.sound.play() {
                     if scene.trace.is_some() {
-                        eprintln!("P2 sound: interaction.click (settings)");
+                        eprintln!("Sound: interaction.click (settings)");
                     }
                     Ok(())
                 } else {
@@ -188,7 +188,7 @@ impl App {
         };
         if let Err(error) = result {
             if self.options.trace_playback {
-                eprintln!("P2 settings error: {error}");
+                eprintln!("Settings error: {error}");
             }
             let status = if matches!(action, SettingsAction::Save | SettingsAction::Reset) {
                 "未保存"
@@ -287,7 +287,7 @@ impl App {
             return Ok(None);
         }
         let result = (|| -> Result<_, Box<dyn std::error::Error>> {
-            // The Run value is the source of truth. Roll it back if JSON replacement fails.
+            // The Run value is the source of truth. Roll it back if TOML replacement fails.
             let mut old_value = None;
             if let (Some(enabled), Some(entry)) = (autostart, &self.autostart) {
                 let previous = entry.read()?;
@@ -332,6 +332,7 @@ impl App {
     pub(super) fn handle_menu(&mut self, event_loop: &ActiveEventLoop, command: Option<Command>) {
         match command {
             Some(Command::OpenSettings) => self.open_settings(event_loop, None),
+            #[cfg(feature = "window-diagnostics")]
             Some(Command::OpenPreview) => self.open_preview(event_loop),
             Some(Command::Exit) => event_loop.exit(),
             Some(

@@ -10,15 +10,16 @@
 ## 工程与产物
 
 - `src/main.rs` 是桌宠入口，`src/lib.rs` 为桌宠和 `validate-pack` 提供共用实现。模块职责见 [G-03](G-03-architecture.md)。
-- `tests/` 通过公开接口测试包加载和资源查找。需要私有状态的白盒测试置于对应模块的独立测试文件。内置合成 PNG 仍随程序构建，合成包由 `scripts/validation/` 生成。
+- `tests/` 通过公开接口测试包加载和资源查找。需要私有状态的白盒测试放在对应模块的独立 `tests.rs`，仅测试构建编译。合成包生成、用例驱动、窗口操作和结果判定放在 `scripts/validation/`。程序提供诊断日志及按 feature 启用的诊断入口，内置占位 PNG 供已启动场景恢复使用。
+- `scripts/assets/` 转换和装配本地素材。发布附件由 `scripts/release/` 装配。功能模块、Cargo feature 和诊断名称按用途命名，阶段编号用于验证脚本、产物和阶段报告。
 
 | 路径 | 用途 |
 | --- | --- |
-| `target/` | Cargo 默认构建输出，本地和 CI 使用相同约定 |
+| `target/` | 日常开发及 CI 的 Cargo 编译和缓存目录 |
 | `artifacts/validation/<阶段>/fixtures/` | 生成的验证输入 |
 | `artifacts/validation/<阶段>/tools/` | 本地验证依赖 |
 | `artifacts/validation/<阶段>/runs/<运行名>/` | 单次验证的日志、采样和报告，每次使用唯一运行名 |
-| `artifacts/dist/<版本>/` | 待验收的发布附件与校验值 |
+| `artifacts/dist/<版本>/` | 独立发布构建、装配暂存目录、待验收附件与校验值 |
 
 需要隔离 Cargo 构建时，显式使用 `--target-dir target/<用途>`。验证脚本在仓库根运行。以下合成包复测需要 Python 3.11 或更新版本。采样命令显式指定被测 EXE。
 
@@ -34,7 +35,13 @@ $pack = 'artifacts/validation/p1/fixtures/dawn'
 python scripts/validation/p1/measure-p1b-playback.py --exe "$build/desktop-pet-chatgpt.exe" --pack $pack --output artifacts/validation/p1/runs/dawn-smoke-01 --formats png --rounds 1 --warmup 2 --seconds 10
 ```
 
-开发用 FFmpeg 对照通过 `cargo build --release --locked --features p1b-reference --target-dir target/reference` 单独编译，命令显式传入独立安装的 FFmpeg 和素材输入。普通构建与程序 ZIP 使用默认 features。Windows CI 由维护者手动触发，执行锁定构建、格式、Clippy 及默认和全 feature 测试。
+| Cargo feature | 用途 |
+| --- | --- |
+| `development` | 启用开发 TOML、素材档位和诊断日志 |
+| `window-diagnostics` | 独立启用窗口定位、尺寸模式、诊断日志和中文输入预览。可以分别测试产品配置和开发配置 |
+| `ffmpeg-decoder` | 含 `development`。增加外部 FFmpeg 解码对照，需显式指定 FFmpeg 和源视频。窗口定位如需控制则另外启用 `window-diagnostics` |
+
+普通构建与程序 ZIP 使用默认 features。Windows CI 由维护者手动触发，执行锁定构建、格式、Clippy 及默认和全 feature 测试。
 
 ## 素材包 v1
 
@@ -66,7 +73,7 @@ PNG 为静态、8 位 RGBA，使用直通 alpha。原始 RGBA8 为逐行连续�
 
 包内文件采用以 `/` 分隔的相对路径，每段仅允许 ASCII 字母、数字和 `._-`，且不能是空段、`.` 或 `..`。解析后的文件须为包根内的普通文件。所有 SHA-256 使用 64 位小写十六进制字符。清单字段和校验规则见 [Rust 类型](../src/media/manifest.rs)及[读取端](../src/media/pack.rs)。320×320 代表页参考 4–5 帧横排，预算见 [G-06](G-06-validation.md#3-性能实验与预算)。
 
-v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机。可选 ID 为 `interact`、`drag`、`land`、`move-left`、`move-right`、`edge-left`、`edge-right`、`peek-left`、`peek-right`。缺失姿态回到待机，缺失互动保持当前动画，缺失或运行时失败的预览在菜单中禁用。P1 已有的循环单动作 `move` 和 `reference` 包仍可播放。动作列表顺序对绑定无影响。启动时依次尝试配置包和 EXE 旁默认包。清单、载荷路径和首个待机页通过加载并能上传后才显示角色，两处都失败则退出。后续页按需校验。
+v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机。可选语义 ID 为 `interact`、`drag`、`land`、`move-left`、`move-right`、`edge-left`、`edge-right`、`peek-left`、`peek-right`。缺失探头姿态先尝试同侧吸边，再尝试待机。缺失互动保持当前动画，缺失或运行时失败的预览在菜单中禁用。已有的循环单动作 `move` 和 `reference` 包仍可播放。动作列表顺序对绑定无影响。启动依次尝试配置包和当前配置来源对应的默认包。清单、载荷路径和首个待机页通过加载并能上传后才允许显示角色，两处都失败则退出。后续页按需校验。
 
 `logical_size` 定义画布宽高，`anchor` 是相对画布的归一化坐标，`offset` 以适配后的画布宽高为单位，正值向右、向下。先将画布等比居中适配视口，再绕锚点应用 `scale`，最后应用偏移并量化到像素边界。呈现和 alpha 命中共用目标矩形及像素中心采样。自主移动要求一次性动作同时声明对应方向与非空 `movement_us` 窗口。手动预览可原地播放这些动作。
 
@@ -78,12 +85,13 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 | --- | --- |
 | `assets/source/<素材集>/` | 本地素材原件、来源说明、清单和许可文件 |
 | `assets/packs/<pack-id>/<pack-version>/` | 已转换、可校验和待装配的解包目录 |
+| `assets/packs/white-dragon/0.1.0/` | 开发 TOML 生效时的原型默认包 |
 | `<exe-dir>/resources/default/` | 发布程序约定的默认包根 |
 | `<exe-dir>/resources/<其他目录>/` | 可在产品配置中选择的其他本地包 |
 
 素材转换统一以根 `assets/` 为工作区。素材原件、转换包与独立发行 ZIP 由 Git 忽略。转换或重新分页应保留动作 ID、时序、资源映射和来源记录。资源/依赖台账登记 ID、来源、作者或权利主体、获取日期、SHA-256、许可依据、允许用途、转换链和拟入包范围。私人通信证据保存在受控位置，公开文档只留脱敏索引。
 
-通过配置的 `pack_path` 指向解包根。默认包按 EXE 所在目录定位，显式路径按下节解析。安装或更新先解到新目录并校验，再切换目录，或在退出后替换默认包。保留上一版本用于回退。
+通过配置的 `pack_path` 指向解包根。开发 TOML 和产品 TOML 的默认包分别以配置目录和 EXE 目录定位。显式路径按下节解析。安装或更新先解到新目录并校验，再切换目录，或在退出后替换默认包。保留上一版本用于回退。[本地原型素材装配](../assets/README.md)
 
 ## 配置分层
 
@@ -91,24 +99,29 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 | --- | --- | --- |
 | 构建 | `Cargo.toml`、`rust-toolchain.toml` | 工具链、依赖和 features |
 | 产品偏好 | `%LOCALAPPDATA%/DesktopPetChatGPT/config.toml` | 用户可选的启动值与设置偏好 |
-| 开发配置 | 启动工作目录的 `desktop-pet.dev.toml` | 启用 Cargo feature `development` 时优先读取；文件缺失时读取产品配置 |
+| 开发配置 | 启动工作目录的 `desktop-pet.dev.toml` | 启用 Cargo feature `development` 时为唯一默认配置来源，缺失时使用内置默认值 |
 
-两个文件共用 UTF-8 TOML 模型、解析器和校验规则，最多 64 KiB，接受 UTF-8 BOM。选定文件后由同一套内置默认值补全缺项，文件间不合并。默认构建只读取产品配置，开发配置和开发诊断参数仅在显式启用相应 feature 的构建中生效。可从 [desktop-pet.example.toml](../desktop-pet.example.toml) 复制模板。旧 `config.json` 由[显式迁移](#旧数据迁移)读取。
+两个文件共用 UTF-8 TOML 模型、解析器和校验规则，最多 64 KiB，接受 UTF-8 BOM。构建标记决定唯一配置来源，缺项由内置默认值补全。开发构建的普通启动、设置和配置恢复均在工程目录范围内。产品构建将偏好写入用户目录。开发配置和诊断参数各由对应 feature 控制。可从 [desktop-pet.example.toml](../desktop-pet.example.toml) 复制模板。旧 `config.json` 由[显式迁移](#旧数据迁移)读取。
 
 | 字段 | 规则 |
 | --- | --- |
 | `schema_version` | 整数，当前为 1，省略按 1 处理 |
 | `initial_scale_percent` | 50–200 的整数，默认 70。无已保存尺寸时乘以物理探测基准，探测不可用时基准为 256 DIP |
 | `[saved_size]` | 可选表，`base_dip` 为 1–4096 的逻辑基准，`percent` 为 50–200 的整数。共同确定逻辑边长，优先于初始比例和物理探测 |
-| `[preferences]` | `auto_move`、`fullscreen_hide`、`sound`、`task_bubbles` 默认开启，`passthrough` 默认关闭，`bubble_scale_percent` 为 50–150 的整数，默认 100 |
-| `pack_path` | 含 `manifest.json` 的本地目录。相对路径以选中的配置文件所在目录为准。省略时直接加载 EXE 旁的 `resources/default/`，指定包加载失败时也尝试该目录 |
-| `[development]` | 仅允许出现在开发构建读取的 `desktop-pet.dev.toml` 中。可选 `format` 为 `"png"`、`"rgba8"`、`"bc7"`，`trace_playback` 和 `trace_input` 为布尔值。`p1b-reference` 构建还可指定 `"ffmpeg"` |
+| `preferences.start_hidden` | 布尔值，默认 false。启动时设为手动隐藏，需要可用托盘。「显示/隐藏」仅影响当次运行 |
+| `preferences.fullscreen_hide` | 布尔值，默认 true。角色所在屏幕的前台窗口全屏时自动隐藏，需要可用托盘 |
+| `preferences.auto_move`、`preferences.sound` | 布尔值，默认 true，分别控制自移动和音效 |
+| `preferences.passthrough` | 布尔值，默认 false。开启全窗口鼠标穿透，需要可用托盘 |
+| `preferences.task_bubbles` | 布尔值，默认 true。任务提醒气泡开关，运行效果随外部任务集成接入 |
+| `preferences.bubble_scale_percent` | 50–150 的整数，默认 100。任务提醒气泡大小 |
+| `pack_path` | 含 `manifest.json` 的本地目录。相对路径以所选配置文件所在目录为准。省略或指定包加载失败时，开发配置加载配置目录内的 `assets/packs/white-dragon/0.1.0/`，产品配置加载 EXE 旁的 `resources/default/` |
+| `[development]` | 仅允许出现在开发构建读取的 `desktop-pet.dev.toml` 中。可选 `format` 为 `"png"`、`"rgba8"`、`"bc7"`，`trace_playback` 和 `trace_input` 为布尔值。`ffmpeg-decoder` 构建还可指定 `"ffmpeg"` |
 
 配置文件缺失时使用默认值。选中的文件读取、解析或校验失败时，启动弹窗显示原因并询问是否备份和覆盖。拒绝会保留原件并退出。确认后先将可读取的原始字节备份到配置目录的 `backups/`，再以默认 TOML 原子替换同一配置。无法安全备份或写入时提示失败、保留原文件并退出。未知字段与不支持的版本按无效配置处理。
 
 产品设置中的「应用并保存」提交确认值，关闭窗口撤销预览。未改动大小时保留首次尺寸推导策略。「恢复默认设置」清除已保存的尺寸、素材包等偏好。写入使用同目录独立临时文件，刷盘后替换正式文件。开发配置生效时，设置只应用到本次运行。登录自启使用当前 Windows 用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 中的 `DesktopPetChatGPT` 项，注册值是带引号的绝对 EXE 路径。仅真实用户目录的产品设置确认或恢复默认会修改该项。配置替换失败时尝试恢复原注册值并报告回滚错误。
 
-开发构建的诊断脚本可用 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE` 和 `DESKTOP_PET_TRACE_INPUT` 提供缺省诊断参数，`[development]` 中同名功能的显式设置优先。`p1b-reference` 包含 `development`，另允许 `DESKTOP_PET_REFERENCE_*`。例如 `DESKTOP_PET_REFERENCE_CLIENT=320,x,y` 固定窗口，`auto,x,y` 和 `dip,x,y` 用于指定目标屏。
+开发构建的诊断脚本可用 `DESKTOP_PET_FORMAT`、`DESKTOP_PET_TRACE` 和 `DESKTOP_PET_TRACE_INPUT` 提供缺省诊断参数，`[development]` 中对应的显式设置优先。仅启用窗口诊断时，可用后两项收集日志，素材格式保持 PNG。窗口诊断以 `DESKTOP_PET_WINDOW_GEOMETRY=模式,x,y` 指定物理像素坐标，`auto` 使用普通尺寸逻辑，`dip` 跳过 EDID 探测，`256`、`320`、`512` 固定客户区像素边长。FFmpeg 对照使用 `DESKTOP_PET_FFMPEG_EXE` 和 `DESKTOP_PET_FFMPEG_VIDEO`，可通过 `DESKTOP_PET_FFMPEG_VERIFY` 启用 RGBA8 页哈希核验。
 
 ## 旧数据迁移
 
@@ -134,6 +147,8 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 - 源码归档来自标记的 Git 树，包含常驻规范和阶段文档。
 - 程序 ZIP 按明确清单装配。收录默认 feature 的 EXE、已审定的运行依赖、许可通知、版本与校验清单和用户说明。P4 核实 CRT、字体、干净机及回退；历史文档和阶段验证产物留在开发侧。
 - 素材 ZIP 是独立附件，ZIP 根直接放 `manifest.json` 和清单引用的文件。经确认可分发的包才附到 release，并在发布说明中列出程序版本、适用的素材包版本、附件 SHA-256、来源与分发依据。安装时把 ZIP 内容解到指定包根。
+
+发布时从确定的提交进行独立默认 feature 构建，使用 `--target-dir artifacts/dist/<版本>/build`，再按清单把 EXE 和运行依赖放入独立暂存目录。素材从审定的解包根单独装配，安装后解到发布 EXE 旁的 `resources/default/`。日常开发使用工程的 `assets/`，日常 `target/` 的编译输出及其中曾存放的历史样本均不直接用于发布。归档中的 `target/` 路径只记录当时的实验。
 
 在本地装配时使用新输出文件名，命令会输出整个 ZIP 的 SHA-256。工具校验输入及装配快照，包括整包载荷和实际播放的页预算，成功后才写入目标附件。`validate-pack <目录>` 检查清单和整包载荷，`--distribution` 额外试读全部已声明的页档。
 

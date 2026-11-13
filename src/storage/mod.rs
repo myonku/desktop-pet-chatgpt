@@ -54,7 +54,7 @@ pub enum AssetFormat {
     Png,
     Rgba8,
     Bc7,
-    #[cfg(feature = "p1b-reference")]
+    #[cfg(feature = "ffmpeg-decoder")]
     Ffmpeg,
 }
 
@@ -161,10 +161,6 @@ impl ConfigStore {
 
     pub fn root(&self) -> &Path {
         self.file.parent().unwrap()
-    }
-
-    pub fn is_missing(&self) -> bool {
-        self.snapshot.is_none() && self.problem.is_none()
     }
 
     pub fn problem(&self) -> Option<&str> {

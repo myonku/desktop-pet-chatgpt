@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct Preferences {
     pub auto_move: bool,
     pub fullscreen_hide: bool,
+    pub start_hidden: bool,
     pub sound: bool,
     pub task_bubbles: bool,
     pub bubble_scale_percent: u16,
@@ -16,6 +17,7 @@ impl Default for Preferences {
         Self {
             auto_move: true,
             fullscreen_hide: true,
+            start_hidden: false,
             sound: true,
             task_bubbles: true,
             bubble_scale_percent: 100,

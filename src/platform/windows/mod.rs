@@ -56,6 +56,7 @@ const SUBCLASS_ID: usize = 1;
 
 pub enum Command {
     TogglePassthrough,
+    #[cfg(feature = "window-diagnostics")]
     OpenPreview,
     ToggleVisibility,
     ToggleAuto,
@@ -281,6 +282,7 @@ impl WindowInput {
                 },
             )?;
             AppendMenuW(menu.0, MF_STRING, 2, w!("退出"))?;
+            #[cfg(feature = "window-diagnostics")]
             AppendMenuW(menu.0, MF_STRING, 3, w!("中文输入预览"))?;
             AppendMenuW(
                 menu.0,
@@ -345,6 +347,7 @@ impl WindowInput {
             Ok(match selected.0 {
                 1 if self.tray => Some(Command::TogglePassthrough),
                 2 => Some(Command::Exit),
+                #[cfg(feature = "window-diagnostics")]
                 3 => Some(Command::OpenPreview),
                 4 if self.tray => Some(Command::ToggleVisibility),
                 5 => Some(Command::ToggleAuto),
@@ -619,7 +622,7 @@ unsafe extern "system" fn window_proc(
                     && unsafe { DwmFlush() }.is_ok()
                 {
                     let latency = unsafe { GetTickCount() }.wrapping_sub(started);
-                    eprintln!("P1b drag compositor flush: {latency} ms");
+                    eprintln!("Drag compositor flush: {latency} ms");
                 }
             }
         }

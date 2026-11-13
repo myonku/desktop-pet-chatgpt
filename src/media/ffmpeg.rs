@@ -58,7 +58,7 @@ impl Decoder {
             .map(|(i, page)| (page.id.as_str(), i))
             .collect();
         let mut first = 0;
-        let verify = std::env::var_os("DESKTOP_PET_REFERENCE_VERIFY").is_some();
+        let verify = std::env::var_os("DESKTOP_PET_FFMPEG_VERIFY").is_some();
         for group in action.frames.chunk_by(|a, b| a.page == b.page) {
             let i = indices[group[0].page.as_str()];
             let page = &manifest.pages[i];
@@ -99,8 +99,8 @@ impl Decoder {
                 .and_then(|path| PathBuf::from(path).canonicalize())
         };
         Ok(Self {
-            exe: path("DESKTOP_PET_REFERENCE_FFMPEG")?,
-            video: path("DESKTOP_PET_REFERENCE_VIDEO")?,
+            exe: path("DESKTOP_PET_FFMPEG_EXE")?,
+            video: path("DESKTOP_PET_FFMPEG_VIDEO")?,
             size: action.logical_size,
             pages,
             frame_count: first,

@@ -100,8 +100,8 @@ def measure(exe, config, variant, warmup, duration, log, process_factory, page_s
     env = dict(os.environ, DESKTOP_PET_FORMAT=variant, DESKTOP_PET_TRACE="1",
                LOCALAPPDATA=str(config.parent.resolve() / "profile"))
     if variant == "ffmpeg":
-        env.update(DESKTOP_PET_REFERENCE_FFMPEG=str(reference[0].resolve()),
-                   DESKTOP_PET_REFERENCE_VIDEO=str(reference[1].resolve()))
+        env.update(DESKTOP_PET_FFMPEG_EXE=str(reference[0].resolve()),
+                   DESKTOP_PET_FFMPEG_VIDEO=str(reference[1].resolve()))
     started = time.perf_counter()
     with subprocess.Popen([str(exe.resolve())], cwd=config.parent,
                           env=env, stdout=subprocess.DEVNULL,
@@ -162,7 +162,7 @@ def measure(exe, config, variant, warmup, duration, log, process_factory, page_s
                 if ("using placeholder" in line or "using PNG" in line
                         or line.startswith("Asset playback format fallback:")):
                     raise RuntimeError(f"requested format did not play; see {log.name}")
-                if first_asset and timestamp >= first_asset + warmup and line.startswith("P1b frame "):
+                if first_asset and timestamp >= first_asset + warmup and line.startswith("Playback frame "):
                     frames.append(tuple(map(int, line.split()[2:])))
                     if process and (not resources or timestamp >= resources[-1][0] + 1):
                         sample()

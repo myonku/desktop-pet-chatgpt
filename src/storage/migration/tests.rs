@@ -25,6 +25,11 @@ fn config_import_preserves_source_and_retries_before_and_after_publication() {
     assert_eq!(fs::read(&source).unwrap(), original);
     assert_eq!(fs::read(journal.join("source.json")).unwrap(), original);
     let generated = fs::read(&file).unwrap();
+    assert!(
+        !std::str::from_utf8(&generated)
+            .unwrap()
+            .contains("start_hidden")
+    );
 
     fs::remove_file(journal.join("applied")).unwrap();
     assert!(import_config().already_applied);

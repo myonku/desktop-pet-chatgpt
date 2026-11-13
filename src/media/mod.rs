@@ -1,12 +1,12 @@
 mod manifest;
 mod pack;
 
+#[cfg(all(windows, feature = "ffmpeg-decoder"))]
+mod ffmpeg;
 #[cfg(windows)]
 pub(crate) mod frame;
 #[cfg(windows)]
 pub(crate) mod playback;
-#[cfg(all(windows, feature = "p1b-reference"))]
-mod reference;
 
 pub use manifest::{Action, Direction, Frame, Manifest, Page, Payload, Resource, ResourceContent};
 pub use pack::{LoadedResource, PLAYBACK_PAGE_LIMIT, Pack};
@@ -16,7 +16,7 @@ pub enum Variant {
     Png,
     Rgba8,
     Bc7,
-    #[cfg(feature = "p1b-reference")]
+    #[cfg(feature = "ffmpeg-decoder")]
     Ffmpeg,
 }
 
@@ -26,7 +26,7 @@ impl Variant {
             Self::Png => "PNG",
             Self::Rgba8 => "RGBA8",
             Self::Bc7 => "BC7",
-            #[cfg(feature = "p1b-reference")]
+            #[cfg(feature = "ffmpeg-decoder")]
             Self::Ffmpeg => "FFMPEG",
         }
     }

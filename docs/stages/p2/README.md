@@ -10,6 +10,26 @@ P0 和 P1 已结项，记录收纳于[归档索引](../../archive/README.md)。P
 | P2-03 存储迁移 | 本地验收完成 | P2-02 的用户目录、TOML 配置 schema 与原子保存 | 显式导入旧偏好和历史，验证备份回退、损坏恢复和幂等重试。见[实施与验收记录](P2-03-storage-migration.md) |
 | P2-04 离线验收 | 本地回归通过，待断网实测 | P2-02/03 | 已留存可运行检查点、动作覆盖率、代表素材体积及资源开销。见[实施与验收记录](P2-04-offline-validation.md) |
 
+## 原型运行与设备复测
+
+2026-11-13 从 `482ad10` 更新本地原型。菜单层级、差分预览、隐藏恢复、尺寸算法及设备约束已写入常驻设计。TOML 新增 `preferences.start_hidden`，旧配置缺项按 false 读取。产品和开发配置均可设置可见性、气泡及其他公开偏好。开发配置默认加载本地白龙 PNG 素材包，转换脚本与验证脚本各自独立。见[功能规格](../../G-02-feature-spec.md#菜单与设置)、[工程约定](../../G-05-contracts.md)和[素材装配](../../../assets/README.md)。
+
+开发构建只使用工程目录的 TOML，文件缺失时使用内置值。设置回归分别构建产品与开发版本，验证双方的配置来源隔离。发布使用独立构建和装配，发布 EXE 旁的素材路径由安装布局决定。[配置与发布装配](../../G-05-contracts.md#配置分层)
+
+单屏基础回归和多显示器专项分别运行并留档。当前 Windows 11、Intel 核显、内屏 125%／外屏 100% 环境已验证两屏独立启动尺寸、跨屏保留 DIP、工作区约束及同屏／异屏全屏行为。私人笔记本可独立复测单屏。外屏拔除、负坐标实机、另一套笔记本和实际断网仍分别待复测。[复测命令与设备条件](../../G-06-validation.md#多显示器专项)
+
+默认及全 feature 的 Rust 测试各通过 28 项，Clippy 和锁定构建通过。Windows 日志与报告位于 `artifacts/validation/p2/runs/` 下。
+
+| 检查 | 证据 |
+| --- | --- |
+| 单屏行为与 DIP 回退 | `prototype-single-1794531091/result.json` |
+| 扩展桌面与混合 DPI | `prototype-multi-1794531129/result.json` |
+| 设置、启动隐藏与托盘恢复 | `prototype-settings-1794531221/result.json` |
+| 默认发布构建、只读安装与重启 | `prototype-product-1794530797/result.json`，宿主仍联网 |
+| 旧配置及历史迁移 | `prototype-migration-1794531269/result.json` |
+| 原型包与 FFmpeg 对照 | 开发构建从白龙素材首帧启动。对照结果在 `prototype-media-1794530923/smoke/result.json`，PNG 和 FFmpeg 均呈现 48/48 帧 |
+| 配置来源隔离复测 | `config-separation-settings-1794536145/result.json`。单屏与混合 DPI 复测见 `config-separation-1794535995/` 下的 `single/result.json` 和 `multi/result.json` |
+
 ## P2-03 开工前调整
 
 2026-11-12 在 `codex/p2` 的 P2-02 检查点 `ebf6b58` 上统一产品与开发的 TOML 读取规则。开发构建通过 `development` feature 决定文件优先级和可用字段。坏配置启动时由用户确认是否备份并覆盖，旧 JSON 留作显式迁移的候选输入。

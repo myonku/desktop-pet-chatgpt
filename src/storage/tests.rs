@@ -32,12 +32,17 @@ fn toml_defaults_and_settings_round_trip() {
     assert_eq!(config.saved_size, None);
     assert!(config.preferences.sound);
     assert!(config.preferences.task_bubbles);
+    assert!(!config.preferences.start_hidden);
     assert!(!config.preferences.passthrough);
     config.saved_size = Some(SavedSize {
         base_dip: 250.0,
         percent: 120,
     });
     config.preferences.sound = false;
+    config.preferences.start_hidden = true;
+    config.preferences.fullscreen_hide = false;
+    config.preferences.task_bubbles = false;
+    config.preferences.bubble_scale_percent = 125;
     config.preferences.passthrough = true;
     assert!(store.save(&config, false).unwrap().is_none());
     let (_, saved) = ConfigStore::load(root.0.join("config.toml"), false);
@@ -105,7 +110,7 @@ fn confirmed_repair_preserves_an_unreadable_file() {
         .unwrap();
     let (mut store, config) = ConfigStore::load(path.clone(), false);
     assert!(config.is_none());
-    assert!(!store.is_missing());
+    assert!(store.problem().is_some());
     assert!(store.save(&Config::default(), true).is_err());
     drop(lock);
     assert_eq!(fs::read(path).unwrap(), bytes);

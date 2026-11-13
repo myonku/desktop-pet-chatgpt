@@ -1,16 +1,17 @@
-"""Build a local P1b pack from a constant-rate transparent VP9 action."""
+"""Convert a constant-rate transparent VP9 action to v1 material pages."""
 
 import argparse
 import hashlib
 import importlib.metadata
 import json
 from pathlib import Path
-import runpy
 import subprocess
 import time
 import zlib
 
-import ispc_texcomp
+from pack_png import png
+
+PROFILE = "alpha_basic"
 
 
 def main():
@@ -21,14 +22,15 @@ def main():
     parser.add_argument("--fps", type=int, choices=(24, 30), required=True)
     parser.add_argument("--size", type=int, default=320)
     parser.add_argument("--batch", type=int, default=4)
+    parser.add_argument("--png-only", action="store_true")
     args = parser.parse_args()
+    if not args.png_only:
+        import ispc_texcomp
     size, batch = args.size, args.batch
     if (size < 4 or size % 4 or batch < 1 or size * batch > 4096
             or size * size * batch * 5 > 6 * 1024**2):
         parser.error("page layout exceeds alignment, dimensions or playback budget")
     args.output.mkdir(parents=True, exist_ok=False)
-    fixture = runpy.run_path(str(Path(__file__).with_name("generate-p1b-fixtures.py")))
-    sha, png, profile = (fixture[key] for key in ("sha", "png", "PROFILE"))
     command = [str(args.ffmpeg.resolve()), "-hide_banner", "-loglevel", "error", "-nostdin",
                "-threads", "2", "-c:v", "libvpx-vp9", "-i", str(args.source.resolve()),
                "-map", "0:v:0", "-an", "-sn", "-dn", "-filter_threads", "1",
@@ -38,7 +40,7 @@ def main():
     def write(relative, data):
         path = args.output / relative
         path.write_bytes(data)
-        return {"path": relative, "sha256": sha(data)}
+        return {"path": relative, "sha256": hashlib.sha256(data).hexdigest()}
 
     with args.source.open("rb") as source:
         source_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
@@ -48,13 +50,15 @@ def main():
         "source_sha256": [source_sha256],
         "tools": {"ffmpeg": subprocess.check_output([command[0], "-version"], text=True).splitlines()[0],
                   "filter": command[command.index("-vf") + 1],
-                  "zlib": f"{zlib.ZLIB_RUNTIME_VERSION} level 6",
-                  "ispc_texcomp": f"{importlib.metadata.version('ispc_texcomp')} {profile}"},
+                  "zlib": f"{zlib.ZLIB_RUNTIME_VERSION} level 6"},
         "pages": [], "actions": [], "resources": [],
     }
     frames = []
-    totals = dict.fromkeys(("png", "rgba8", "bc7"), 0)
-    settings = ispc_texcomp.BC7EncSettings.from_profile(profile)
+    totals = {"png": 0}
+    if not args.png_only:
+        totals.update(rgba8=0, bc7=0)
+        manifest["tools"]["ispc_texcomp"] = f"{importlib.metadata.version('ispc_texcomp')} {PROFILE}"
+        settings = ispc_texcomp.BC7EncSettings.from_profile(PROFILE)
     stride = size * 4
     frame_bytes = stride * size
     has_alpha = False
@@ -70,14 +74,17 @@ def main():
                 width = count * size
                 rgba = b"".join(data[i + y:i + y + stride] for y in range(0, frame_bytes, stride)
                                 for i in range(0, len(data), frame_bytes))
-                surface = ispc_texcomp.RGBASurface(rgba, width, size, width * 4)
-                page = {"id": page_id, "size": [width, size]}
-                for variant, payload in (("png", png(rgba, width, size)), ("rgba8", rgba),
-                                         ("bc7", ispc_texcomp.compress_blocks_bc7(surface, settings))):
-                    if variant == "png" and len(payload) > 3 * 1024**2:
-                        raise ValueError("PNG exceeds playback staging budget")
-                    page[variant] = write(f"{page_id}.{variant}", payload)
-                    totals[variant] += len(payload)
+                payload = png(rgba, width, size)
+                if len(payload) > 3 * 1024**2:
+                    raise ValueError("PNG exceeds playback staging budget")
+                page = {"id": page_id, "size": [width, size], "png": write(f"{page_id}.png", payload)}
+                totals["png"] += len(payload)
+                if not args.png_only:
+                    surface = ispc_texcomp.RGBASurface(rgba, width, size, width * 4)
+                    bc7 = ispc_texcomp.compress_blocks_bc7(surface, settings)
+                    for variant, data in (("rgba8", rgba), ("bc7", bc7)):
+                        page[variant] = write(f"{page_id}.{variant}", data)
+                        totals[variant] += len(data)
                 manifest["pages"].append(page)
                 for slot in range(count):
                     i = len(frames)

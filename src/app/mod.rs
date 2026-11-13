@@ -32,13 +32,16 @@ use crate::{
         Autostart, Display, Gesture, Instance, Sound, WindowInput, physical_size, user_profile,
     },
     render::{Renderer, placeholder::Placeholder},
-    ui::{Preview, SettingsWindow},
+    ui::SettingsWindow,
 };
 
 use self::{
     assets::{CharacterAssets, LoadedPack},
     settings::RuntimeSettings,
 };
+
+#[cfg(feature = "window-diagnostics")]
+use crate::ui::InputPreview;
 
 pub(crate) enum AppEvent {
     TrayMenu(PhysicalPosition<i32>),
@@ -53,7 +56,8 @@ pub(crate) enum AppEvent {
 struct App {
     options: launch::LaunchOptions,
     scene: Option<Scene>,
-    preview: Option<Preview>,
+    #[cfg(feature = "window-diagnostics")]
+    preview: Option<InputPreview>,
     settings: Option<SettingsWindow>,
     committed: Option<RuntimeSettings>,
     autostart: Option<Autostart>,
@@ -81,7 +85,7 @@ struct Scene {
     display: Option<Display>,
     screen_poll: Instant,
     applied_size: Option<PhysicalSize<u32>>,
-    reference_geometry: bool,
+    fixed_geometry: bool,
     probe_edid: bool,
     unavailable: std::collections::BTreeSet<String>,
     surface_retried: bool,
@@ -101,19 +105,25 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     if !args.is_empty() {
         return migration::run(&args);
     }
-    let profile = user_profile()?;
-    let Some(instance) = Instance::acquire(&profile.root)? else {
+    let (root, login_registration) = if cfg!(feature = "development") {
+        (std::env::current_dir()?.canonicalize()?, false)
+    } else {
+        let profile = user_profile()?;
+        (profile.root, profile.login_registration)
+    };
+    let Some(instance) = Instance::acquire(&root)? else {
         return Ok(());
     };
-    let options = launch::LaunchOptions::load(profile.root)?;
+    let options = launch::LaunchOptions::load(root)?;
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let mut app = App {
         options,
         scene: None,
+        #[cfg(feature = "window-diagnostics")]
         preview: None,
         settings: None,
         committed: None,
-        autostart: profile.login_registration.then(Autostart::default),
+        autostart: login_registration.then(Autostart::default),
         instance,
         proxy: event_loop.create_proxy(),
         error: None,
@@ -144,10 +154,7 @@ impl Scene {
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_transparent(true)
             .with_no_redirection_bitmap(true);
-        #[cfg(feature = "p1b-reference")]
-        let (attributes, geometry) = launch::reference_client_geometry(attributes)?;
-        #[cfg(not(feature = "p1b-reference"))]
-        let geometry = launch::StartupGeometry::Product;
+        let (attributes, geometry) = launch::window_geometry(attributes)?;
         let window = Arc::new(event_loop.create_window(attributes)?);
         let sample = Placeholder::load()?;
         let wants_bc7 = options.variant == Variant::Bc7;
@@ -165,6 +172,7 @@ impl Scene {
         };
         let (pack_path, pack, pack_status) = assets::load_startup_pack(
             options.startup.pack_path.as_deref(),
+            options.startup.default_pack()?,
             variant,
             &proxy,
             &mut renderer,
@@ -208,6 +216,7 @@ impl Scene {
         };
         let mut pet = Pet::new(Instant::now());
         pet.auto_enabled = runtime.preferences.auto_move;
+        pet.manual_hidden = runtime.preferences.start_hidden && input.has_tray();
         pet.fullscreen = runtime.preferences.fullscreen_hide
             && input.has_tray()
             && display.is_some_and(|display| input.fullscreen(display));
@@ -246,7 +255,7 @@ impl Scene {
             display,
             screen_poll: Instant::now(),
             applied_size,
-            reference_geometry: geometry.fixed(),
+            fixed_geometry: geometry.fixed(),
             probe_edid: geometry.probe_edid(),
             unavailable: Default::default(),
             surface_retried: false,
@@ -296,7 +305,7 @@ impl Scene {
         if let Some(trace) = &mut self.trace {
             trace.pending = None;
             eprintln!(
-                "P1b visibility: {visible} {}",
+                "Window visibility: {visible} {}",
                 trace.start.elapsed().as_micros()
             );
         }
@@ -326,7 +335,7 @@ impl Scene {
             {
                 trace.action = playback.active_id().to_owned();
                 eprintln!(
-                    "P2 action: {} {}",
+                    "Playback action: {} {}",
                     trace.action,
                     trace.start.elapsed().as_micros()
                 );
@@ -374,7 +383,7 @@ impl Scene {
                     && let Some((sequence, page, prepare_us)) = trace.pending.take()
                 {
                     eprintln!(
-                        "P1b frame {sequence} {page} {} {prepare_us}",
+                        "Playback frame {sequence} {page} {} {prepare_us}",
                         trace.start.elapsed().as_micros()
                     );
                 }
@@ -405,6 +414,7 @@ impl Scene {
 }
 
 impl App {
+    #[cfg(feature = "window-diagnostics")]
     fn open_preview(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(preview) = &self.preview {
             preview.window().set_minimized(false);
@@ -412,7 +422,7 @@ impl App {
             preview.window().request_redraw();
             return;
         }
-        match Preview::open(event_loop) {
+        match InputPreview::open(event_loop) {
             Ok(preview) => self.preview = Some(preview),
             Err(error) => eprintln!("Could not open Chinese preview: {error}"),
         }
@@ -480,6 +490,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if scene.visible {
                     scene.window.request_redraw();
                 }
+                #[cfg(feature = "window-diagnostics")]
                 if let Some(preview) = &self.preview {
                     preview.window().request_redraw();
                 }
@@ -540,6 +551,7 @@ impl ApplicationHandler<AppEvent> for App {
             self.settings_event(event_loop, &event);
             return;
         }
+        #[cfg(feature = "window-diagnostics")]
         if let Some(preview) = &mut self.preview
             && preview.window().id() == id
         {
@@ -596,7 +608,11 @@ impl ApplicationHandler<AppEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let preview = self.preview.as_mut().and_then(Preview::repaint_deadline);
+        #[cfg(feature = "window-diagnostics")]
+        let preview = self
+            .preview
+            .as_mut()
+            .and_then(InputPreview::repaint_deadline);
         let had_playback = self
             .scene
             .as_ref()
@@ -626,7 +642,9 @@ impl ApplicationHandler<AppEvent> for App {
             .settings
             .as_mut()
             .and_then(SettingsWindow::repaint_deadline);
-        let deadline = preview.into_iter().chain(settings).chain(pet).min();
+        let deadline = settings.into_iter().chain(pet).min();
+        #[cfg(feature = "window-diagnostics")]
+        let deadline = deadline.into_iter().chain(preview).min();
         event_loop.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 }

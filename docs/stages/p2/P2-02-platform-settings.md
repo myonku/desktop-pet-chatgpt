@@ -25,14 +25,15 @@ cargo build --locked
 cargo build --release --locked
 cargo test --locked
 cargo test --locked --all-features
-cargo build --release --locked --features p1b-reference --target-dir target/reference
+cargo build --release --locked --features window-diagnostics --target-dir target/product-diagnostics
+cargo build --release --locked --features development,window-diagnostics --target-dir target/window-diagnostics
 python scripts/validation/p2/generate-fixtures.py
 $packs = 'artifacts/validation/p1/fixtures'
 $run = 'artifacts/validation/p2/runs/p2-02-recheck'
 target/release/validate-pack.exe --distribution "$packs/dawn"
 target/release/validate-pack.exe --distribution "$packs/dusk"
-python scripts/validation/p2/check-settings.py --exe target/reference/release/desktop-pet-chatgpt.exe --packs $packs --output $run
-python scripts/validation/p2/check-windows.py --exe target/reference/release/desktop-pet-chatgpt.exe --fixtures artifacts/validation/p2/fixtures --output "$run/core-regression"
+python scripts/validation/p2/check-settings.py --exe target/product-diagnostics/release/desktop-pet-chatgpt.exe --dev-exe target/window-diagnostics/release/desktop-pet-chatgpt.exe --packs $packs --output $run
+python scripts/validation/p2/check-windows.py --exe target/window-diagnostics/release/desktop-pet-chatgpt.exe --fixtures artifacts/validation/p2/fixtures --output "$run/core-regression"
 ```
 
 `dawn`、`dusk` 由 [P1 合成包脚本](../../../scripts/validation/p1/generate-p1b-fixtures.py) 生成，依赖安装见 [G-05](../../G-05-contracts.md#工程与产物)。两包使用不同资源路径和内容。

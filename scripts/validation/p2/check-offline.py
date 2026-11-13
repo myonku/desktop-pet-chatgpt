@@ -15,17 +15,11 @@ import sys
 import time
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from windows_desktop import U, bounds, drag, find_window, fullscreen, get_monitor, hit, menu, message, require, wait
+
 
 HERE = Path(__file__).resolve().parent
 SETTINGS = runpy.run_path(str(HERE / "check-settings.py"))
-NATIVE = SETTINGS["native"]
-U = NATIVE["U"]
-bounds, drag, find_window, fullscreen, get_monitor, hit, menu, message, require, wait = (
-    NATIVE[name] for name in (
-        "bounds", "drag", "find_window", "fullscreen", "get_monitor", "hit", "menu", "message",
-        "require", "wait",
-    )
-)
 CORE_ACTIONS = {
     "idle", "interact", "drag", "land", "move-left", "move-right",
     "edge-left", "edge-right", "peek-left", "peek-right",
