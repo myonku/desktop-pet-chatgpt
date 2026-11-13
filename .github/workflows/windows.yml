@@ -1,4 +1,4 @@
-name: Windows Rust checks
+name: Windows checks
 
 on: workflow_dispatch
 
@@ -20,3 +20,8 @@ jobs:
       - run: cargo build --locked
       - run: cargo test --locked
       - run: cargo test --locked --all-features
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+      - run: python -m pip install uv==0.12.18
+      - run: uv run --locked --group optimize python scripts/validation/check-asset-optimizer.py

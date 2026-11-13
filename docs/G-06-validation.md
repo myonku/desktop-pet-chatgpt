@@ -14,7 +14,7 @@
 | F-06 | 单屏验证物理探测、256 DIP 回退、有效配置尺寸优先、缩放及四边/四角约束。跨屏与断屏另见下方专项 | P2 |
 | F-07 | 单屏验证配置启动隐藏、托盘显示、关闭自动隐藏、手动隐藏与全屏隐藏交错。隐藏无持续动画，恢复无跳位。异屏全屏另见下方专项 | P2 |
 | F-08 | 静音、任务气泡关闭与主动额度互不串扰；失败无成功声音 | P2/P3 |
-| F-09 | 缺项按缺省策略补全；设置实时应用并在重启后恢复；一键恢复后重启仍为内置默认值；写入失败保留原文件；坏配置确认前不改写，确认后备份并恢复，拒绝则退出；穿透可由托盘撤销；开发优先级和开发字段受构建标记约束 | P2 |
+| F-09 | 缺项按缺省策略补全；设置实时应用并在重启后恢复；角色和托盘菜单关闭设置并撤销预览，菜单修改单独保存；一键恢复后重启仍为内置默认值；写入失败保留原文件；坏配置确认前不改写，确认后备份并恢复，拒绝则退出；穿透可由托盘撤销；开发优先级和开发字段受构建标记约束 | P2 |
 | F-10 | 用两个适配器验证能力隔离、标识和专属文案、缺项通用回退、切换后迟到事件；缺客户端/认证/部分能力/未知版本时普通桌宠可用 | P3 |
 | F-11 | 首次水位、重连、重复终态、工具失败与整轮成功区分；仅公开字段 | P3 |
 | F-12 | 中文 IME、流式/长回复、历史滚动、草稿、同模式复用与会话隔离 | P3 |
@@ -41,13 +41,28 @@ Windows 单屏实机覆盖透明、置顶不抢焦点、输入穿透、托盘恢
 
 在 P2 记录同屏拖动与自主移动交接、跨页播放中的输入响应，以及打开产品设置后的资源开销。现有 P1b 参考机上的页面准备和拖动短测作为对照。事件线程同步等待 GPU 的每次 250 ms 是原型保护上限，F-17 仍按输入到可见反馈的延迟验收。
 
-CI：Windows locked build、fmt、clippy、现有纯逻辑/契约测试；自有 fixtures。GUI 截图/实机证据另存节点记录。开发时序覆写的实验单独标记，按素材原时序完成正式验收。
+Windows CI 执行锁定构建、fmt、clippy、Rust 测试和素材优化的 CPU 合成检查。GUI 截图和实机证据另存节点记录。开发时序覆写的实验单独标记，按素材原时序完成正式验收。
+
+在仓库根运行下列命令复验素材优化。GPU 路径另传 `--gpu-exe` 和 `--models`，同时验证成功输出和错误设备的清理行为。
+
+```powershell
+uv run --locked --group optimize python scripts/validation/check-asset-optimizer.py
+```
 
 P2-01 的 [Windows 行为脚本](../scripts/validation/p2/check-windows.py) 只操作主屏上的测试窗口，记录动作、可见性、命中区域和启动尺寸。单屏入口可在任一笔记本运行，即使连接外屏也只验收主屏。
 
 P2-02 用 [设置验收脚本](../scripts/validation/p2/check-settings.py) 分别运行产品配置和开发配置构建。产品用隔离用户目录验证保存、恢复和重启。开发用隔离工作目录验证有无开发 TOML 时均与产品配置隔离。其余覆盖包括单实例、托盘、坏配置、文件占用、素材回退及资源换包。核心验收脚本验证两处都没有可用素材包时拒绝启动。自启注册表读写使用隔离的 HKCU 子键验证。
 
-P2-04 用[离线验收脚本](../scripts/validation/p2/check-offline.py)在只读安装目录及独立用户目录下运行默认发布构建，验证本地资源、窗口行为与偏好重启。断网验收使用无外部客户端的 Windows 测试环境并启用 `--require-disconnected`。记录连接状态、可运行检查点、动作覆盖和代表包开销。正式资源范围和性能矩阵随 P4 验收。
+### 离线与设备复验
+
+[离线验收脚本](../scripts/validation/p2/check-offline.py)在只读安装目录及独立用户目录下运行默认发布构建，验证本地资源、窗口行为与偏好重启。严格断网和无外部客户端的行为复验纳入 P3 基线，最迟在 P4 候选完成。测试前先准备锁定的 uv 环境和发布构建。记录运行前后连接状态、可运行检查点、动作覆盖和代表包开销。 [排期](stages/p2-p3/README.md#遗留复验)
+
+```powershell
+uv sync --locked
+cargo build --release --locked
+uv run --offline --locked python scripts/validation/p2/generate-fixtures.py
+uv run --offline --locked python scripts/validation/p2/check-offline.py --exe target/release/desktop-pet-chatgpt.exe --validator target/release/validate-pack.exe --fixtures artifacts/validation/p2/fixtures --output artifacts/validation/p3/runs/strict-offline-01 --require-disconnected
+```
 
 ### 多显示器专项
 
@@ -64,11 +79,11 @@ P2-04 用[离线验收脚本](../scripts/validation/p2/check-offline.py)在只�
 
 ```powershell
 cargo build --release --locked --features development,window-diagnostics --target-dir target/window-diagnostics
-python scripts/validation/p2/generate-fixtures.py
+uv run --locked python scripts/validation/p2/generate-fixtures.py
 $exe = 'target/window-diagnostics/release/desktop-pet-chatgpt.exe'
 $fixtures = 'artifacts/validation/p2/fixtures'
-python scripts/validation/p2/check-windows.py --exe $exe --fixtures $fixtures --output artifacts/validation/p2/runs/single-display-01
-python scripts/validation/p2/check-multi-display.py --exe $exe --fixtures $fixtures --output artifacts/validation/p2/runs/multi-display-01
+uv run --locked python scripts/validation/p2/check-windows.py --exe $exe --fixtures $fixtures --output artifacts/validation/p2/runs/single-display-01
+uv run --locked python scripts/validation/p2/check-multi-display.py --exe $exe --fixtures $fixtures --output artifacts/validation/p2/runs/multi-display-01
 ```
 
 ## 3. 性能实验与预算
@@ -101,5 +116,9 @@ python scripts/validation/p2/check-multi-display.py --exe $exe --fixtures $fixtu
 ## 4. 发布门槛与回退
 
 P4 必须有需求矩阵结果、窗口/设备记录、所有实际入包动作验证、性能报告、迁移/回退演练、干净机离线验证、版本/哈希/许可清单、已知限制。候选包以实际可分发清单为准，素材删减同步更新交付范围和发布说明。
+
+素材优化初版用合成帧验证颜色、alpha、保护区、帧顺序和失败输出。候选实测固定输出尺寸并比较明暗背景和整段时序，记录实际入包动作及派生来源，核对帧数、时长、移动时窗、轮廓命中和分页预算。正式 ZIP 使用 `validate-pack --distribution` 校验其装配快照，核对与源码同版及来源记录。 [素材实验](stages/p2-p3/README.md#后续素材实验)
+
+轮廓验证包含碎片化透明帧的逐像素命中检查。候选包另选粒子或透明碎片较多的动作，在代表性 DPI 与缩放下测量帧间隔和输入响应，并与本节预算对照。页字节数和文件体积只覆盖存储及解码边界。
 
 若外部集成只支持部分客户端版本，发布说明明确版本和能力；不兼容时退出对应功能。回退使用上一可运行检查点、原配置/历史备份和匹配素材包；不要求旧程序读取新 schema。存在未解决数据丢失、越权审批或不可恢复退出问题时不得标为候选就绪。

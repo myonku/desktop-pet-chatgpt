@@ -43,6 +43,25 @@ impl Pack {
         &self.manifest
     }
 
+    /// Select the same startup action for the player and the offline validator.
+    pub fn startup_action(&self, allow_reference: bool) -> io::Result<usize> {
+        let actions = &self.manifest.actions;
+        actions
+            .iter()
+            .position(|action| action.id == "idle" && action.looping)
+            .or(match actions.as_slice() {
+                [action]
+                    if allow_reference
+                        && action.looping
+                        && matches!(action.id.as_str(), "move" | "reference") =>
+                {
+                    Some(0)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| invalid("asset pack needs a looping idle action"))
+    }
+
     pub fn resource(&self, key: &str, client_id: Option<&str>) -> Option<&Resource> {
         let matches = |client| {
             self.manifest
@@ -100,6 +119,11 @@ impl Pack {
         {
             return Err(invalid("unsupported schema or missing pack metadata"));
         }
+        let action_pages: BTreeSet<_> = m
+            .actions
+            .iter()
+            .flat_map(|action| action.frames.iter().map(|frame| frame.page.as_str()))
+            .collect();
         let mut pages = BTreeMap::new();
         for page in &m.pages {
             let [w, h] = page.size;
@@ -115,7 +139,10 @@ impl Pack {
                 .chain(&page.rgba8)
                 .chain(&page.bc7)
             {
-                self.validate_path(payload)?;
+                validate_payload_descriptor(payload)?;
+                if action_pages.contains(page.id.as_str()) {
+                    contained_path(&self.root, &payload.path)?;
+                }
             }
         }
         let mut actions = BTreeSet::new();
@@ -177,18 +204,10 @@ impl Pack {
                 }
                 ResourceContent::Image { .. } => {}
                 ResourceContent::Audio { file } | ResourceContent::Text { file } => {
-                    self.validate_path(file)?;
+                    validate_payload_descriptor(file)?;
                 }
             }
         }
-        Ok(())
-    }
-
-    fn validate_path(&self, payload: &Payload) -> io::Result<()> {
-        if !valid_hash(&payload.sha256) {
-            return Err(invalid("invalid SHA-256 digest"));
-        }
-        contained_path(&self.root, &payload.path)?;
         Ok(())
     }
 
@@ -369,7 +388,14 @@ fn valid_size(size: [u32; 2]) -> bool {
     size.into_iter().all(|side| (1..=MAX_SIDE).contains(&side))
 }
 
-fn contained_path(root: &Path, relative: &str) -> io::Result<PathBuf> {
+fn validate_payload_descriptor(payload: &Payload) -> io::Result<()> {
+    if !valid_hash(&payload.sha256) {
+        return Err(invalid("invalid SHA-256 digest"));
+    }
+    validate_relative_path(&payload.path)
+}
+
+fn validate_relative_path(relative: &str) -> io::Result<()> {
     if relative.split('/').any(|part| {
         part.is_empty()
             || part == "."
@@ -380,6 +406,11 @@ fn contained_path(root: &Path, relative: &str) -> io::Result<PathBuf> {
     }) {
         return Err(invalid(format!("invalid pack-relative path {relative}")));
     }
+    Ok(())
+}
+
+fn contained_path(root: &Path, relative: &str) -> io::Result<PathBuf> {
+    validate_relative_path(relative)?;
     let path = root.join(relative).canonicalize()?;
     if !path.starts_with(root) || !path.is_file() {
         return Err(invalid(format!(

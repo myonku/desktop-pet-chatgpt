@@ -225,10 +225,14 @@ def settings_roundtrip(exe, profile, dawn, dusk, output):
         wait(lambda: pet.side() != original_side, "live pet resize")
         require(bounds(hwnd) == original_settings_bounds, "resizing moved settings window")
         require(profile.config.read_bytes() == initial, "preview wrote config before Apply")
-        pet.close_settings(hwnd)
-        wait(lambda: pet.side() == original_side, "close cancels preview")
+        mark = len(pet.text())
+        menu(pet.hwnd, "S")
+        wait(lambda: not U.IsWindow(hwnd), "role menu closes the existing settings window")
+        wait(lambda: pet.side() == original_side, "role menu cancels preview")
+        require(profile.config.read_bytes() == initial, "opening the role menu saved a preview")
 
-        hwnd = pet.open_settings(via_menu=True)
+        hwnd = pet.settings()
+        pet.until("Settings control: scale", mark)
         pet.control(hwnd, "scale", 0.03)
         pet.control(hwnd, "sound")
         pet.control(hwnd, "task_bubbles")
@@ -245,9 +249,15 @@ def settings_roundtrip(exe, profile, dawn, dusk, output):
         time.sleep(0.4)
         require("Sound: interaction.click" not in pet.text()[offset:], "muted click emitted sound")
 
+        hwnd = pet.open_settings()
+        pet.control(hwnd, "scale", 0.30)
+        wait(lambda: pet.side() != preview_side, "resize preview before tray menu")
         menu(pet.hwnd, "P", tray=True)
+        wait(lambda: not U.IsWindow(hwnd), "tray menu closes settings")
+        wait(lambda: pet.side() == preview_side, "tray menu cancels resize preview")
         wait(pet.passthrough, "mouse passthrough enabled")
         wait(lambda: profile.read()["preferences"]["passthrough"], "passthrough preference saved")
+        require(profile.read()["saved_size"] == saved["saved_size"], "tray menu saved previewed size")
 
     saved = profile.read()
     saved["pack_path"] = os.path.relpath(dusk, profile.config.parent)
@@ -372,7 +382,7 @@ def main():
     dev_exe.parent.mkdir()
     shutil.copy2(args.dev_exe, dev_exe)
     dev_isolation(dev_exe, exe, Profile(output / "dev-profile"), dawn, dusk, output)
-    report["checks"] = ["single instance", "preview/apply/restart", "sound independence",
+    report["checks"] = ["single instance", "preview/apply/restart", "menus close settings and discard previews", "sound independence",
                         "tray passthrough", "resource swap", "reset/recovery", "default pack fallback",
                         "locked config", "development isolation", "startup visibility and tray recovery"]
     (output / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

@@ -5,8 +5,8 @@ use windows::{
         Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Dwm::DwmFlush,
         Graphics::Gdi::{
-            ClientToScreen, CombineRgn, CreateRectRgn, DeleteObject, HRGN, RGN_ERROR, RGN_OR,
-            SetWindowRgn,
+            ClientToScreen, CreateRectRgn, DeleteObject, ExtCreateRegion, HRGN, RDH_RECTANGLES,
+            RGNDATAHEADER, SetWindowRgn,
         },
         System::{SystemInformation::GetTickCount, SystemServices::MK_LBUTTON},
         UI::{
@@ -392,7 +392,7 @@ impl WindowInput {
             if self.hit_bounds == Some(bounds) {
                 return Ok(());
             }
-            let region = Region::rect(0, 0, 0, 0)?;
+            let mut runs = Vec::<RECT>::new();
             let [_, _, width, height] = frame.rect;
             let [left, top, right, bottom] = frame
                 .canvas
@@ -428,13 +428,23 @@ impl WindowInput {
                         if run_left == run_right {
                             continue;
                         }
-                        let run = Region::rect(run_left, row_top, run_right, row_bottom)?;
-                        if CombineRgn(region.0, region.0, run.0, RGN_OR) == RGN_ERROR {
-                            return Err("could not combine alpha hit regions".into());
+                        if let Some(last) = runs.last_mut()
+                            && last.top == row_top
+                            && last.right == run_left
+                        {
+                            last.right = run_right;
+                        } else {
+                            runs.push(RECT {
+                                left: run_left,
+                                top: row_top,
+                                right: run_right,
+                                bottom: row_bottom,
+                            });
                         }
                     }
                 }
             }
+            let region = Region::from_runs(&runs)?;
             if SetWindowRgn(self.hwnd, region.0, true) == 0 {
                 return Err("could not set the alpha hit region".into());
             }
@@ -555,8 +565,40 @@ impl Drop for Menu {
 struct Region(HRGN);
 
 impl Region {
-    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> Result<Self, String> {
-        let handle = unsafe { CreateRectRgn(left, top, right, bottom) };
+    fn from_runs(runs: &[RECT]) -> Result<Self, String> {
+        let handle = if let Some(&first) = runs.first() {
+            const HEADER_SLOTS: usize = size_of::<RGNDATAHEADER>() / size_of::<RECT>();
+            const {
+                assert!(size_of::<RGNDATAHEADER>() == HEADER_SLOTS * size_of::<RECT>());
+                assert!(align_of::<RECT>() >= align_of::<RGNDATAHEADER>());
+            }
+            let bytes = u32::try_from(size_of_val(runs) + size_of::<RGNDATAHEADER>())
+                .map_err(|_| "alpha hit region exceeds the GDI size limit")?;
+            let bounds = runs.iter().fold(first, |bounds, rect| RECT {
+                left: bounds.left.min(rect.left),
+                top: bounds.top.min(rect.top),
+                right: bounds.right.max(rect.right),
+                bottom: bounds.bottom.max(rect.bottom),
+            });
+            let mut data = Vec::with_capacity(HEADER_SLOTS + runs.len());
+            data.resize(HEADER_SLOTS, RECT::default());
+            data.extend_from_slice(runs);
+            // RGNDATA is an aligned header followed by sorted, non-overlapping RECTs.
+            unsafe {
+                data.as_mut_ptr()
+                    .cast::<RGNDATAHEADER>()
+                    .write(RGNDATAHEADER {
+                        dwSize: size_of::<RGNDATAHEADER>() as u32,
+                        iType: RDH_RECTANGLES,
+                        nCount: runs.len() as u32,
+                        nRgnSize: size_of_val(runs) as u32,
+                        rcBound: bounds,
+                    });
+                ExtCreateRegion(None, bytes, data.as_ptr().cast())
+            }
+        } else {
+            unsafe { CreateRectRgn(0, 0, 0, 0) }
+        };
         if handle.is_invalid() {
             return Err("could not allocate an alpha hit region".into());
         }

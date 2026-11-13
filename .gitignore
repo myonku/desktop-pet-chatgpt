@@ -8,3 +8,4 @@
 /desktop-pet.dev.toml
 /backups/desktop-pet.dev-invalid-*.toml
 __pycache__/
+.venv/

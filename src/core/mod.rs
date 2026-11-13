@@ -2,7 +2,6 @@ pub mod preferences;
 
 use std::time::{Duration, Instant};
 
-pub const IDLE: &str = "idle";
 pub const INTERACT: &str = "interact";
 pub const MOVE_LEFT: &str = "move-left";
 pub const MOVE_RIGHT: &str = "move-right";

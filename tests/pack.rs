@@ -95,3 +95,80 @@ fn resource_lookup_prefers_client_then_generic() {
     );
     assert!(pack.resource("missing", Some("chatgpt")).is_none());
 }
+
+#[test]
+fn distribution_requires_looping_idle_but_playback_accepts_reference() {
+    let fixture = Fixture::create();
+    let manifest_path = fixture.0.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for (id, looping, playback, distribution) in [
+        ("idle", true, true, true),
+        ("idle", false, false, false),
+        ("interact", false, false, false),
+        ("reference", true, true, false),
+    ] {
+        manifest["actions"][0]["id"] = json!(id);
+        manifest["actions"][0]["looping"] = json!(looping);
+        fs::write(&manifest_path, manifest.to_string()).unwrap();
+        let run = |mode| {
+            std::process::Command::new(env!("CARGO_BIN_EXE_validate-pack"))
+                .arg(mode)
+                .arg(&fixture.0)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        };
+        assert_eq!(run("--playback"), playback, "{id}, looping={looping}");
+        assert_eq!(
+            run("--distribution"),
+            distribution,
+            "{id}, looping={looping}"
+        );
+    }
+}
+
+#[test]
+fn optional_resources_fail_independently_at_runtime_and_fail_strict_validation() {
+    let fixture = Fixture::create();
+    let manifest_path = fixture.0.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    assert!(
+        fixture
+            .open()
+            .load_resource("character.name", None)
+            .unwrap()
+            .is_none()
+    );
+    let digest = format!("{:x}", Sha256::digest([0xff]));
+    manifest["resources"][0] = json!({
+        "key": "character.name", "content": {"kind": "text",
+        "file": {"path": "name.txt", "sha256": digest}}
+    });
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    let pack = fixture.open();
+    assert!(pack.load_resource("character.name", None).is_err());
+    assert!(pack.validate_payloads().is_err());
+    for bytes in [&b"wrong digest"[..], &[0xff][..]] {
+        fs::write(fixture.0.join("name.txt"), bytes).unwrap();
+        let pack = fixture.open();
+        assert!(pack.load_resource("character.name", None).is_err());
+        assert!(pack.validate_payloads().is_err());
+    }
+    let mut poster = manifest["pages"][0].clone();
+    poster["id"] = json!("poster");
+    poster["png"]["path"] = json!("missing-poster.png");
+    manifest["pages"].as_array_mut().unwrap().push(poster);
+    manifest["resources"][0] = json!({
+        "key": "character.poster", "content": {"kind": "image", "page": "poster"}
+    });
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    let pack = fixture.open();
+    assert!(pack.load_resource("character.poster", None).is_err());
+    assert!(pack.validate_payloads().is_err());
+    manifest["actions"][0]["frames"][0]["page"] = json!("poster");
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    assert!(Pack::open(&fixture.0).is_err());
+}

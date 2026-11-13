@@ -99,7 +99,7 @@ fn test_player() -> (Playback, mpsc::Receiver<Request>) {
         actions: vec![
             animation("move-left", false, 3),
             animation("interact", false, 2),
-            animation(IDLE, true, 0),
+            animation("idle", true, 0),
         ],
         base: 2,
         active: 2,
@@ -145,16 +145,16 @@ fn action_switch_holds_frame_discards_stale_page_and_completes_once() {
     let stale = receiver.try_recv().unwrap();
     assert!(player.play(Some("interact"), true));
     assert!(!player.tick(now).unwrap().changed);
-    assert_eq!(player.frame().unwrap().0, 0);
+    assert_eq!(player.frame().unwrap().0.index, 0);
     player.accept(ready(stale));
     assert!(!player.tick(now).unwrap().changed);
     player.accept(ready(receiver.try_recv().unwrap()));
     assert!(player.tick(now).unwrap().changed);
-    assert_eq!(player.frame().unwrap().0, 2);
+    assert_eq!(player.frame().unwrap().0.index, 2);
     let next = receiver.try_recv().unwrap();
     let missing_at = now + Duration::from_millis(100);
     assert_eq!(player.tick(missing_at).unwrap().elapsed, None);
-    assert_eq!(player.frame().unwrap().0, 2);
+    assert_eq!(player.frame().unwrap().0.index, 2);
     player.accept(ready(next));
     let resume = missing_at + Duration::from_millis(40);
     assert_eq!(
@@ -174,7 +174,7 @@ fn action_switch_holds_frame_discards_stale_page_and_completes_once() {
             .finished
     );
     player.play(None, false);
-    assert_eq!(player.active_id(), IDLE);
+    assert_eq!(player.active_id(), "idle");
 }
 
 #[test]
@@ -190,7 +190,7 @@ fn first_page_wait_is_bounded_and_a_retry_keeps_the_prior_frame() {
         panic!("missing page never timed out");
     };
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert_eq!(player.frame().unwrap().0, 0);
+    assert_eq!(player.frame().unwrap().0.index, 0);
     player.play(None, false);
     assert!(player.tick(now + PAGE_TIMEOUT).unwrap().changed);
 }

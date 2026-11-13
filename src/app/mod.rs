@@ -344,7 +344,7 @@ impl Scene {
                 .playback
                 .as_ref()
                 .and_then(Playback::sequence)
-                .zip(key)
+                .zip(key.map(|key| key.index))
                 .map(|(sequence, page)| (sequence, page, prepare_us));
         }
         self.input.invalidate_hit_region();
@@ -414,6 +414,12 @@ impl Scene {
 }
 
 impl App {
+    fn open_menu(&mut self, event_loop: &ActiveEventLoop, position: Option<PhysicalPosition<i32>>) {
+        self.close_settings();
+        let command = self.scene.as_mut().and_then(|scene| scene.menu(position));
+        self.handle_menu(event_loop, command);
+    }
+
     #[cfg(feature = "window-diagnostics")]
     fn open_preview(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(preview) = &self.preview {
@@ -463,8 +469,7 @@ impl ApplicationHandler<AppEvent> for App {
         };
         match event {
             AppEvent::TrayMenu(position) => {
-                let command = scene.menu(Some(position));
-                self.handle_menu(event_loop, command);
+                self.open_menu(event_loop, Some(position));
             }
             AppEvent::OpenSettings => self.open_settings(event_loop, None),
             AppEvent::TaskbarCreated => {
@@ -600,8 +605,7 @@ impl ApplicationHandler<AppEvent> for App {
                 button: MouseButton::Right,
                 ..
             } if !scene.passthrough => {
-                let command = scene.menu(None);
-                self.handle_menu(event_loop, command);
+                self.open_menu(event_loop, None);
             }
             _ => {}
         }

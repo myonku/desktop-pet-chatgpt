@@ -11,28 +11,26 @@
 
 - `src/main.rs` 是桌宠入口，`src/lib.rs` 为桌宠和 `validate-pack` 提供共用实现。模块职责见 [G-03](G-03-architecture.md)。
 - `tests/` 通过公开接口测试包加载和资源查找。需要私有状态的白盒测试放在对应模块的独立 `tests.rs`，仅测试构建编译。合成包生成、用例驱动、窗口操作和结果判定放在 `scripts/validation/`。程序提供诊断日志及按 feature 启用的诊断入口，内置占位 PNG 供已启动场景恢复使用。
-- `scripts/assets/` 转换和装配本地素材。发布附件由 `scripts/release/` 装配。功能模块、Cargo feature 和诊断名称按用途命名，阶段编号用于验证脚本、产物和阶段报告。
+- `scripts/assets/` 转换和装配本地素材。发布附件由 `scripts/release/` 装配。可导入的离线优化模块放在 `tools/asset_optimizer/`。功能模块、Cargo feature 和诊断名称按用途命名，阶段编号用于验证脚本、产物和阶段报告。
+- 根目录 `pyproject.toml`、`.python-version` 和 `uv.lock` 固定 Python 工具环境，`.venv/` 留在本地。使用 `uv run --locked`，旧媒体实验和 BC7 工具加 `--group media`，素材优化加 `--group optimize`。如 GPU 推理需要单独的 Python 依赖或版本，使用独立 uv 项目。外部工具和权重在素材来源记录中登记版本与哈希。
 
 | 路径 | 用途 |
 | --- | --- |
 | `target/` | 日常开发及 CI 的 Cargo 编译和缓存目录 |
 | `artifacts/validation/<阶段>/fixtures/` | 生成的验证输入 |
-| `artifacts/validation/<阶段>/tools/` | 本地验证依赖 |
 | `artifacts/validation/<阶段>/runs/<运行名>/` | 单次验证的日志、采样和报告，每次使用唯一运行名 |
 | `artifacts/dist/<版本>/` | 独立发布构建、装配暂存目录、待验收附件与校验值 |
 
-需要隔离 Cargo 构建时，显式使用 `--target-dir target/<用途>`。验证脚本在仓库根运行。以下合成包复测需要 Python 3.11 或更新版本。采样命令显式指定被测 EXE。
+需要隔离 Cargo 构建时，显式使用 `--target-dir target/<用途>`。验证脚本在仓库根运行。采样命令显式指定被测 EXE。
 
 ```powershell
 cargo build --release --locked --features development --target-dir target/development
-python -m pip install --target artifacts/validation/p1/tools ispc_texcomp==1.0.1 texture2ddecoder==1.0.6 psutil==7.1.3
-$env:PYTHONPATH = (Resolve-Path artifacts/validation/p1/tools).Path
-python scripts/validation/p0/generate-p0-fixtures.py
-python scripts/validation/p1/generate-p1b-fixtures.py
+uv run --locked python scripts/validation/p0/generate-p0-fixtures.py
+uv run --locked --group media python scripts/validation/p1/generate-p1b-fixtures.py
 $build = 'target/development/release'
 $pack = 'artifacts/validation/p1/fixtures/dawn'
-& "$build/validate-pack.exe" --distribution $pack
-python scripts/validation/p1/measure-p1b-playback.py --exe "$build/desktop-pet-chatgpt.exe" --pack $pack --output artifacts/validation/p1/runs/dawn-smoke-01 --formats png --rounds 1 --warmup 2 --seconds 10
+& "$build/validate-pack.exe" --playback $pack
+uv run --locked --group media python scripts/validation/p1/measure-p1b-playback.py --exe "$build/desktop-pet-chatgpt.exe" --pack $pack --output artifacts/validation/p1/runs/dawn-smoke-01 --formats png --rounds 1 --warmup 2 --seconds 10
 ```
 
 | Cargo feature | 用途 |
@@ -67,7 +65,13 @@ ZIP 解包后，包根须直接包含 UTF-8 JSON 文件 `manifest.json` 及其�
 | 包元数据 | `schema_version` 为整数 1，`pack_id` 与 `pack_version` 为非空字符串，`color_space` 为 `"sRGB"`，`alpha` 为 `"straight"`。必填非空 `source_sha256` 数组和 `tools` 字符串映射，分别记录源文件哈希和转换工具 |
 | `pages` | 非空列表。每页包含唯一 `id`、像素宽高 `size` 和必备 `png` 载荷。可选 `rgba8`、`bc7` 载荷与 PNG 共用宽高和帧表。所有载荷对象含 `path` 和原始文件字节的 `sha256` |
 | `actions` | 非空列表。每个动作含唯一 `id`、`logical_size`、`looping`、`anchor`、`offset`、`scale`、`directions` 和非空 `frames`，可选 `movement_us`。方向列表支持 `"left"`、`"right"`，无方向要求时可为空。帧用 `page` 引用页 ID，`rect` 为页内像素 `[x,y,w,h]`，`duration_us` 为正整数微秒。移动时窗 `[start,end]` 与帧时长使用同一时间单位 |
-| `resources` | 必填列表，可为空。每项含 `key` 与 `kind`，可选 `client_id`。同一 `key` 与 `client_id` 组合唯一。图像 `kind = "image"` 用 `page` 引用页 ID，`"audio"` 和 `"text"` 用 `file` 记录载荷。请求指定客户端资源时优先精确匹配，再查找通用项 |
+| `resources` | 必填列表，可为空。每项含 `key`、`content` 和可选的 `client_id`。同一 `key` 与 `client_id` 组合唯一。`content.kind` 为 `"image"` 时用 `content.page` 引用页 ID，为 `"audio"` 或 `"text"` 时用 `content.file` 记录载荷。请求指定客户端资源时优先精确匹配，再查找通用项 |
+
+```json
+{"key":"character.poster","content":{"kind":"image","page":"poster"}}
+```
+
+上文的合成包生成命令可生成含图像、音效和文案的完整资源示例 `dawn`。它使用历史参考动作。使用 [P2 合成包生成器](../scripts/validation/p2/generate-fixtures.py)可另生成含循环待机的产品包样例 `p2-idle-only`，用于分发校验。
 
 PNG 为静态、8 位 RGBA，使用直通 alpha。原始 RGBA8 为逐行连续的 RGBA 字节，无文件头。BC7 为无文件头的 4×4 块流，每块 16 字节，页宽高须为 4 的倍数。页和逻辑画布各边为 1–4096。PNG 为默认兼容档，请求 BC7 时按设备与页面支持情况使用 RGBA8 或 PNG。声音为 RIFF WAVE，支持单声道或双声道 PCM16，含标准 16 字节 `fmt ` 块，紧接 `data` 块。文本为 UTF-8。当前设置和交互使用通用的 `character.poster`、`character.name`、`interaction.click`，分别提供角色图、名称与点击音效。
 
@@ -77,19 +81,28 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 
 `logical_size` 定义画布宽高，`anchor` 是相对画布的归一化坐标，`offset` 以适配后的画布宽高为单位，正值向右、向下。先将画布等比居中适配视口，再绕锚点应用 `scale`，最后应用偏移并量化到像素边界。呈现和 alpha 命中共用目标矩形及像素中心采样。自主移动要求一次性动作同时声明对应方向与非空 `movement_us` 窗口。手动预览可原地播放这些动作。
 
-运行时页限制比整包静态校验更严格。静态页 RGBA8 展开上限 32 MiB，当前单播放页上限 6 MiB，BC7 同时计入压缩块和 CPU 命中用 RGBA。PNG 输入和解码器工作区各有 3 MiB 限额。清单及单个音频/文本载荷各有 1 MiB 限额。P2 制包和 P4 附件装配均使用 `validate-pack --distribution` 检查声明的全部页档。可选资源未声明时按语义键回退，已声明载荷的有效性仍按包校验规则检查。
+运行时页限制比整包静态校验更严格。静态页 RGBA8 展开上限 32 MiB，当前单播放页上限 6 MiB，BC7 同时计入压缩块和 CPU 命中用 RGBA。PNG 输入和解码器工作区各有 3 MiB 限额。清单及单个音频/文本载荷各有 1 MiB 限额。
+
+| 可选资源状态 | 启动 | 离线校验 |
+| --- | --- | --- |
+| 未声明 | 使用通用图文或静音 | 允许 |
+| 文件缺失、读取失败、哈希不符或载荷格式无效 | 当前资源不可用，使用同样的回退。仅作为图像资源引用的页适用此规则 | 拒绝 |
+| 清单结构、载荷描述或页引用无效 | 拒绝该包 | 拒绝 |
+
+动作使用的页仍按动画载荷规则处理，即使同一页也作为图像资源引用。运行时读取文件时继续检查路径在包根内。
 
 ## 素材工作区
 
 | 路径 | 用途 |
 | --- | --- |
 | `assets/source/<素材集>/` | 本地素材原件、来源说明、清单和许可文件 |
+| `assets/work/<候选>/` | 本地优化试验的中间帧和报告 |
 | `assets/packs/<pack-id>/<pack-version>/` | 已转换、可校验和待装配的解包目录 |
 | `assets/packs/white-dragon/0.1.0/` | 开发 TOML 生效时的原型默认包 |
 | `<exe-dir>/resources/default/` | 发布程序约定的默认包根 |
 | `<exe-dir>/resources/<其他目录>/` | 可在产品配置中选择的其他本地包 |
 
-素材转换统一以根 `assets/` 为工作区。素材原件、转换包与独立发行 ZIP 由 Git 忽略。转换或重新分页应保留动作 ID、时序、资源映射和来源记录。资源/依赖台账登记 ID、来源、作者或权利主体、获取日期、SHA-256、许可依据、允许用途、转换链和拟入包范围。私人通信证据保存在受控位置，公开文档只留脱敏索引。
+素材转换统一以根 `assets/` 为工作区。素材原件、试验帧、转换包与独立发行 ZIP 由 Git 忽略。白龙素材发布源为 `jingh12312-rgb/bailong-desktop-pet`，保留原许可说明。转换或重新分页应保留动作 ID、时序、资源映射和来源记录。资源/依赖台账登记 ID、来源、作者或权利主体、获取日期、SHA-256、许可依据、允许用途、转换链和拟入包范围。私人通信证据保存在受控位置，公开文档只留脱敏索引。
 
 通过配置的 `pack_path` 指向解包根。开发 TOML 和产品 TOML 的默认包分别以配置目录和 EXE 目录定位。显式路径按下节解析。安装或更新先解到新目录并校验，再切换目录，或在退出后替换默认包。保留上一版本用于回退。[本地原型素材装配](../assets/README.md)
 
@@ -144,16 +157,29 @@ v1 读取器拒绝未知字段。产品包使用循环 `idle` 作为必备待机
 
 ## 源码、程序与素材附件
 
+正式素材 ZIP 名称及其清单的 `pack_version` 与本项目 `Cargo.toml` 的发布版本一致。本地候选包可用独立版本和目录，装配白龙包时用 `--pack-version` 指定。协议 `schema_version` 按读取兼容性维护。
+
+同一 Release 附来源记录，登记上游发布链接与版本、实际输入及哈希、原素材许可、选定候选包、处理配方、工具及模型版本或哈希，以及正式 ZIP 的 SHA-256。若输入来自 fork 的衍生附件，记录该附件和上游来源。完整记录作为独立附件，运行时清单继续使用 v1 字段。
+
+白龙装配器同时写出本地 `provenance.json`，绑定成品清单哈希、上游清单哈希、逐动作源视频哈希和转换配方。用优化帧或派生姿态制作候选时，按动作登记源动作、优化报告哈希、输出帧哈希及派生参数，并在来源记录中关联候选清单哈希。来源文件与素材 ZIP 分开保存。
+
 - 源码归档来自标记的 Git 树，包含常驻规范和阶段文档。
 - 程序 ZIP 按明确清单装配。收录默认 feature 的 EXE、已审定的运行依赖、许可通知、版本与校验清单和用户说明。P4 核实 CRT、字体、干净机及回退；历史文档和阶段验证产物留在开发侧。
 - 素材 ZIP 是独立附件，ZIP 根直接放 `manifest.json` 和清单引用的文件。经确认可分发的包才附到 release，并在发布说明中列出程序版本、适用的素材包版本、附件 SHA-256、来源与分发依据。安装时把 ZIP 内容解到指定包根。
 
 发布时从确定的提交进行独立默认 feature 构建，使用 `--target-dir artifacts/dist/<版本>/build`，再按清单把 EXE 和运行依赖放入独立暂存目录。素材从审定的解包根单独装配，安装后解到发布 EXE 旁的 `resources/default/`。日常开发使用工程的 `assets/`，日常 `target/` 的编译输出及其中曾存放的历史样本均不直接用于发布。归档中的 `target/` 路径只记录当时的实验。
 
-在本地装配时使用新输出文件名，命令会输出整个 ZIP 的 SHA-256。工具校验输入及装配快照，包括整包载荷和实际播放的页预算，成功后才写入目标附件。`validate-pack <目录>` 检查清单和整包载荷，`--distribution` 额外试读全部已声明的页档。
+在本地装配时使用新输出文件名，命令会输出整个 ZIP 的 SHA-256。工具对输入及装配快照执行分发校验，成功后写入附件。
+
+| 校验方式 | 条件 |
+| --- | --- |
+| `validate-pack <目录>` | 检查清单和所有已声明载荷 |
+| `validate-pack --playback <目录>` | 另检查页播放预算和启动动作，接受循环 `idle` 或历史循环单动作 `move` / `reference` |
+| `validate-pack --distribution <目录>` | 检查所有已声明页档的播放预算，产品启动动作必须为循环 `idle`。Windows 上的实际启动和渲染仍按 G-06 验收 |
 
 ```powershell
-python scripts/release/assemble-asset-pack.py --validator "$build/validate-pack.exe" --pack $pack --output artifacts/dist/local/pet-assets-dawn-0.1.0.zip
+uv run --locked python scripts/validation/p2/generate-fixtures.py
+uv run --locked python scripts/release/assemble-asset-pack.py --validator "$build/validate-pack.exe" --pack artifacts/validation/p2/fixtures/p2-idle-only --output artifacts/dist/local/pet-assets-idle-0.1.0.zip
 ```
 
 用合成包或已获相应权限的素材验证装配。现有素材的公开发布资格按 [许可说明](../README.md#许可) 和 P4 清单审定。

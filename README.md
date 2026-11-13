@@ -47,6 +47,8 @@ cargo run --locked --features development
 | `src/`、`tests/` | 程序、素材校验器与测试 |
 | `scripts/assets/`、`scripts/release/` | 素材转换与附件装配 |
 | `scripts/validation/` | 合成输入、单屏和多屏回归、性能采样 |
+| `tools/asset_optimizer/` | 离线素材优化模块 |
+| `pyproject.toml`、`uv.lock` | Python 工具环境与依赖锁定 |
 | [`assets/`](assets/README.md) | 本地素材原件和转换包 |
 | `target/` | Cargo 默认输出 |
 | [`artifacts/`](artifacts/README.md) | 阶段验证产物与待验收附件 |
@@ -54,6 +56,8 @@ cargo run --locked --features development
 ## 版本规则
 
 `Cargo.toml` 的包版本是版本来源。修复和兼容性小改动通常增加补丁位，新增能力或阶段性迁移通常增加次版本位。`0.x` 阶段的破坏性变更通过次版本和迁移说明标记。发布时同步更新锁文件、带 `v` 前缀的 Git 标签和发布说明。
+
+正式素材附件与本仓库源码使用同一发布版本。本地素材候选可以自定版本，素材发布源为 `jingh12312-rgb/bailong-desktop-pet`。 [版本、来源与装配](docs/G-05-contracts.md#源码程序与素材附件)
 
 ## 许可
 

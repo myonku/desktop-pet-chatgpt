@@ -135,17 +135,19 @@ impl App {
         settings.character(scene.assets.name.as_deref(), poster);
     }
 
+    pub(super) fn close_settings(&mut self) {
+        if self.settings.take().is_some()
+            && let Some(scene) = &mut self.scene
+            && let Some(committed) = self.committed
+            && let Err(error) = scene.apply_runtime(committed)
+        {
+            scene.input.settings_error(&error);
+        }
+    }
+
     pub(super) fn settings_event(&mut self, event_loop: &ActiveEventLoop, event: &WindowEvent) {
         if matches!(event, WindowEvent::CloseRequested) {
-            self.settings = None;
-            if let Err(error) = self
-                .scene
-                .as_mut()
-                .unwrap()
-                .apply_runtime(self.committed.unwrap())
-            {
-                self.scene.as_ref().unwrap().input.settings_error(&error);
-            }
+            self.close_settings();
             return;
         }
         let scene = self.scene.as_ref().unwrap();
@@ -341,22 +343,12 @@ impl App {
                 | Command::ToggleFullscreen
                 | Command::TogglePassthrough),
             ) => {
-                if let Some(settings) = &mut self.settings {
-                    let mut draft = settings.draft.clone();
-                    toggle(&mut draft.preferences, command);
-                    settings.draft = draft.clone();
-                    settings.window().request_redraw();
-                    if let Err(error) = self.preview_settings(&draft) {
-                        self.settings_notice(error);
-                    }
-                } else {
-                    let mut runtime = self.committed.unwrap();
-                    toggle(&mut runtime.preferences, command);
-                    let mut config = self.options.startup.config.clone();
-                    config.preferences = runtime.preferences;
-                    if let Err(error) = self.commit_settings(config, runtime, None, false) {
-                        self.open_settings(event_loop, Some(format!("未保存：{error}")));
-                    }
+                let mut runtime = self.committed.unwrap();
+                toggle(&mut runtime.preferences, command);
+                let mut config = self.options.startup.config.clone();
+                config.preferences = runtime.preferences;
+                if let Err(error) = self.commit_settings(config, runtime, None, false) {
+                    self.open_settings(event_loop, Some(format!("未保存：{error}")));
                 }
             }
             _ => {}

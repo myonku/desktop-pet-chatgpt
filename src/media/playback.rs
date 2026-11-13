@@ -15,7 +15,7 @@ use super::{
     Direction, Pack, PagePixels, Variant,
     frame::{Canvas, FrameView},
 };
-use crate::core::{IDLE, PAGE_TIMEOUT, Side};
+use crate::core::{PAGE_TIMEOUT, Side};
 
 static NEXT_SOURCE: AtomicU64 = AtomicU64::new(1);
 
@@ -206,6 +206,13 @@ pub struct PlaybackTick {
     pub finished: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PageKey {
+    source: u64,
+    pub index: usize,
+    variant: Variant,
+}
+
 impl Playback {
     pub fn open(
         pack: Arc<Pack>,
@@ -213,19 +220,7 @@ impl Playback {
         deliver: impl Fn(PageResult) -> bool + Send + 'static,
     ) -> io::Result<Self> {
         let manifest = pack.manifest();
-        let base = manifest
-            .actions
-            .iter()
-            .position(|action| action.id == IDLE && action.looping)
-            .or(match manifest.actions.as_slice() {
-                [action]
-                    if action.looping && matches!(action.id.as_str(), "move" | "reference") =>
-                {
-                    Some(0)
-                }
-                _ => None,
-            })
-            .ok_or_else(|| io::Error::other("asset pack needs a looping idle action"))?;
+        let base = pack.startup_action(true)?;
         let pages: std::collections::BTreeMap<_, _> = manifest
             .pages
             .iter()
@@ -390,11 +385,15 @@ impl Playback {
         }
     }
 
-    pub fn frame(&self) -> Option<(usize, FrameView<'_>)> {
+    pub fn frame(&self) -> Option<(PageKey, FrameView<'_>)> {
         let (index, pixels) = self.displayed.as_ref()?;
         let selected = self.selected?;
         Some((
-            *index,
+            PageKey {
+                source: self.source.id,
+                index: *index,
+                variant: pixels.variant,
+            },
             FrameView {
                 page_size: pixels.size,
                 rect: selected.rect,

@@ -6,7 +6,10 @@ use winit::{event_loop::EventLoopProxy, window::Window};
 
 use crate::{
     app::AppEvent,
-    media::frame::{Canvas, FrameView},
+    media::{
+        frame::{Canvas, FrameView},
+        playback::PageKey,
+    },
 };
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
@@ -28,7 +31,7 @@ pub struct Renderer {
 struct Sprite {
     texture: wgpu::Texture,
     bind: wgpu::BindGroup,
-    key: Option<usize>,
+    key: Option<PageKey>,
 }
 
 impl Renderer {
@@ -140,7 +143,7 @@ impl Renderer {
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
     }
 
-    pub fn show(&mut self, key: Option<usize>, frame: FrameView<'_>) -> Result<(), String> {
+    pub fn show(&mut self, key: Option<PageKey>, frame: FrameView<'_>) -> Result<(), String> {
         if self.sprite.as_ref().is_none_or(|sprite| sprite.key != key) {
             let [width, height] = frame.page_size;
             let size = wgpu::Extent3d {
