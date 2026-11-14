@@ -134,7 +134,7 @@ def hit(hwnd, x, y):
         G.DeleteObject(region)
 
 
-def menu(hwnd, key, tray=False, subkey=None):
+def menu(hwnd, key, tray=False, subkey=None, during=None):
     thread = U.GetWindowThreadProcessId(hwnd, None)
     if tray:
         message(hwnd, 0x8001, 0x007B, 1)  # Tray WM_CONTEXTMENU, ID 1.
@@ -145,10 +145,16 @@ def menu(hwnd, key, tray=False, subkey=None):
     wait(lambda: U.GetGUIThreadInfo(thread, c.byref(info)) and info.flags & 0x10
          and info.menu == hwnd, "test pet owns popup menu")
 
-    for mnemonic in (key, subkey):
-        if mnemonic:
-            require(U.PostMessageW(hwnd, 0x102, ord(mnemonic.lower()), 1), "post mnemonic to the test menu owner")
-            time.sleep(0.12)
+    try:
+        if during:
+            during()
+        for mnemonic in (key, subkey):
+            if mnemonic:
+                require(U.PostMessageW(hwnd, 0x102, ord(mnemonic.lower()), 1), "post mnemonic to the test menu owner")
+                time.sleep(0.12)
+    except BaseException:
+        message(hwnd, 0x001F)  # WM_CANCELMODE
+        raise
     wait(lambda: U.GetGUIThreadInfo(thread, c.byref(info)) and not info.flags & 0x10,
          f"menu command {key} closed the popup")
 

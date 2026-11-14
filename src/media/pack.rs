@@ -7,7 +7,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-use super::{Manifest, PagePixels, Payload, Resource, ResourceContent, Variant};
+use super::{Manifest, PackIcon, PagePixels, Payload, Resource, ResourceContent, Variant};
 
 const MANIFEST_LIMIT: usize = 1024 * 1024;
 const PAGE_LIMIT: usize = 32 * 1024 * 1024;
@@ -24,6 +24,7 @@ pub struct Pack {
 pub enum LoadedResource {
     Image(PagePixels),
     Audio(Vec<u8>),
+    Icon(PackIcon),
     Text(String),
 }
 impl Pack {
@@ -100,6 +101,9 @@ impl Pack {
             ResourceContent::Text { file } => LoadedResource::Text(
                 String::from_utf8(self.read(file, AUX_LIMIT)?).map_err(io::Error::other)?,
             ),
+            ResourceContent::Icon { file } => {
+                LoadedResource::Icon(PackIcon::parse(self.read(file, AUX_LIMIT)?)?)
+            }
         };
         Ok(Some(loaded))
     }
@@ -198,13 +202,29 @@ impl Pack {
                     resource.key
                 )));
             }
+            if matches!(resource.key.as_str(), "app.icon" | "tray.icon")
+                && (resource.client_id.is_some()
+                    || !matches!(resource.content, ResourceContent::Icon { .. }))
+            {
+                return Err(invalid(format!(
+                    "{} must be a generic icon resource",
+                    resource.key
+                )));
+            }
             match &resource.content {
                 ResourceContent::Image { page } if !pages.contains_key(page.as_str()) => {
                     return Err(invalid(format!("unknown image page {page}")));
                 }
                 ResourceContent::Image { .. } => {}
-                ResourceContent::Audio { file } | ResourceContent::Text { file } => {
+                ResourceContent::Audio { file }
+                | ResourceContent::Icon { file }
+                | ResourceContent::Text { file } => {
                     validate_payload_descriptor(file)?;
+                    if matches!(resource.content, ResourceContent::Icon { .. })
+                        && !file.path.ends_with(".ico")
+                    {
+                        return Err(invalid("icon payload path must end in .ico"));
+                    }
                 }
             }
         }
@@ -319,13 +339,16 @@ impl Pack {
                     }
                 }
                 ResourceContent::Image { .. } => {}
+                ResourceContent::Icon { file } => {
+                    PackIcon::parse(self.read(file, AUX_LIMIT)?)?;
+                }
             }
         }
         Ok(())
     }
 }
 
-fn decode_png(data: Vec<u8>, size: [u32; 2], limit: usize) -> io::Result<Vec<u8>> {
+pub(super) fn decode_png(data: Vec<u8>, size: [u32; 2], limit: usize) -> io::Result<Vec<u8>> {
     let mut decoder = png::Decoder::new(Cursor::new(data));
     decoder.set_limits(png::Limits { bytes: limit });
     let mut reader = decoder.read_info().map_err(io::Error::other)?;
@@ -437,7 +460,7 @@ fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn invalid(message: impl Into<String>) -> io::Error {
+pub(super) fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 

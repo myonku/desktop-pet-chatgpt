@@ -250,6 +250,8 @@ def main():
                         help="also collect CPU, memory and process I/O with psutil")
     parser.add_argument("--gpu-metrics", action="store_true",
                         help="also collect WDDM GPU engine and memory counters")
+    parser.add_argument("--idle-only", action="store_true",
+                        help="disable autonomous movement for a full product pack")
     args = parser.parse_args()
     if args.rounds < 1 or args.warmup < 0 or args.seconds < 1:
         parser.error("require rounds >= 1, warmup >= 0, and seconds >= 1")
@@ -274,10 +276,12 @@ def main():
     samples = {variant: [] for variant in args.formats}
     config = args.output / "desktop-pet.dev.toml"
     pack_path = json.dumps(args.pack.resolve().as_posix(), ensure_ascii=False)
-    config.write_text(f"initial_scale_percent = 100\npack_path = {pack_path}\n", encoding="utf-8")
+    preferences = "\n[preferences]\nauto_move = false\n" if args.idle_only else ""
+    config.write_text(f"initial_scale_percent = 100\npack_path = {pack_path}\n{preferences}", encoding="utf-8")
     metadata = dict(pack=str(args.pack), manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
                     exe_sha256=hashlib.sha256(args.exe.read_bytes()).hexdigest(),
-                    warmup=args.warmup, seconds=args.seconds, rounds=args.rounds, formats=args.formats)
+                    warmup=args.warmup, seconds=args.seconds, rounds=args.rounds, formats=args.formats,
+                    idle_only=args.idle_only)
     if "ffmpeg" in args.formats:
         metadata["video_sha256"] = video_sha256
     (args.output / "run.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")

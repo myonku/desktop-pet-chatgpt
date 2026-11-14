@@ -23,13 +23,14 @@ use winit::{
 };
 
 use crate::{
-    core::{Pet, initial_side_dip, preferences::INITIAL_SCALE},
+    core::{Activity, Pet, Side, initial_side_dip, preferences::INITIAL_SCALE},
     media::{
         Variant,
         playback::{PageResult, Playback},
     },
     platform::windows::{
-        Autostart, Display, Gesture, Instance, Sound, WindowInput, physical_size, user_profile,
+        Autostart, Command, Display, Gesture, Instance, Sound, WindowInput, physical_size,
+        user_profile,
     },
     render::{Renderer, placeholder::Placeholder},
     ui::SettingsWindow,
@@ -45,6 +46,8 @@ use crate::ui::InputPreview;
 
 pub(crate) enum AppEvent {
     TrayMenu(PhysicalPosition<i32>),
+    MenuSelected(Command, Vec<String>),
+    ModalTick,
     TaskbarCreated,
     ResumeDisplay,
     Gesture(Gesture),
@@ -184,12 +187,15 @@ impl Scene {
             playback,
             assets,
             click_wave,
+            tray_icon,
         } = pack;
+        assets.apply_window_icon(&window);
         let input = WindowInput::new(
             &window,
             proxy.clone(),
             options.trace_input,
             instance.marker(),
+            tray_icon,
         )?;
         let display = input.display();
         let physical_mm = if config.saved_size.is_none() && geometry.probe_edid() {
@@ -379,6 +385,12 @@ impl Scene {
         match renderer.draw(size.width, size.height) {
             Ok(()) => {
                 self.surface_retried = false;
+                let selected = self.playback.as_ref().and_then(Playback::selected_id);
+                let edge = selected.is_some_and(|id| {
+                    [Side::Left, Side::Right]
+                        .into_iter()
+                        .any(|side| id == side.pose(false) || id == side.pose(true))
+                });
                 if let Some(trace) = &mut self.trace
                     && let Some((sequence, page, prepare_us)) = trace.pending.take()
                 {
@@ -396,6 +408,8 @@ impl Scene {
                         size.width, size.height
                     );
                 }
+                self.input
+                    .frame_presented(edge, self.pet.activity == Activity::Drag && !edge);
             }
             Err(
                 wgpu::SurfaceError::Lost
@@ -414,10 +428,11 @@ impl Scene {
 }
 
 impl App {
-    fn open_menu(&mut self, event_loop: &ActiveEventLoop, position: Option<PhysicalPosition<i32>>) {
+    fn open_menu(&mut self, position: Option<PhysicalPosition<i32>>) {
         self.close_settings();
-        let command = self.scene.as_mut().and_then(|scene| scene.menu(position));
-        self.handle_menu(event_loop, command);
+        if let Some(scene) = &mut self.scene {
+            scene.menu(position);
+        }
     }
 
     #[cfg(feature = "window-diagnostics")]
@@ -469,8 +484,13 @@ impl ApplicationHandler<AppEvent> for App {
         };
         match event {
             AppEvent::TrayMenu(position) => {
-                self.open_menu(event_loop, Some(position));
+                self.open_menu(Some(position));
             }
+            AppEvent::MenuSelected(command, ids) => {
+                let command = scene.menu_selected(command, &ids);
+                self.handle_menu(event_loop, command);
+            }
+            AppEvent::ModalTick => self.about_to_wait(event_loop),
             AppEvent::OpenSettings => self.open_settings(event_loop, None),
             AppEvent::TaskbarCreated => {
                 scene.input.add_tray();
@@ -605,7 +625,7 @@ impl ApplicationHandler<AppEvent> for App {
                 button: MouseButton::Right,
                 ..
             } if !scene.passthrough => {
-                self.open_menu(event_loop, None);
+                self.open_menu(None);
             }
             _ => {}
         }

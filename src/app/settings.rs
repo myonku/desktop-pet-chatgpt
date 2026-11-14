@@ -104,8 +104,10 @@ impl App {
             draft,
             startup.development,
             scene.trace.is_some(),
+            self.proxy.clone(),
         ) {
             Ok(mut settings) => {
+                scene.assets.apply_window_icon(settings.window());
                 settings.notice = notice;
                 settings.saved_autostart = autostart;
                 self.settings = Some(settings);

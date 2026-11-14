@@ -3,7 +3,7 @@
 # 在仓库根目录运行 cargo run --locked --features development。
 schema_version = 1
 
-# 角色窗口缩放，50–200。无已保存尺寸时乘以显示器推导的基准；探测失败时基准为 256 DIP。
+# 角色窗口缩放，范围 50–200，省略时默认为 100%。无已保存尺寸时乘以显示器推导的基准；探测失败时基准为 256 DIP。
 initial_scale_percent = 100
 
 # 含 manifest.json 的包目录，相对路径以本配置文件所在目录为准。

@@ -91,7 +91,62 @@ def main():
     gpu_args = ["--gpu-exe", str(args.gpu_exe.resolve()), "--models", str(args.models.resolve())] if args.gpu_exe else []
     with tempfile.TemporaryDirectory(prefix="desktop-pet-optimizer-") as folder:
         validate(Path(folder), gpu_args)
+    check_transient_alpha()
+    check_contour_matte()
     print("Asset optimizer CPU checks passed" + ("; Vulkan checks passed" if gpu_args else ""))
+
+
+def check_transient_alpha():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from tools.asset_optimizer.frames import suppress_alpha_noise
+
+    frame = Image.new("RGBA", (320, 320))
+    draw = ImageDraw.Draw(frame)
+    draw.rectangle((100, 100, 220, 250), fill=(200, 160, 130, 255))
+    draw.line((220, 175, 235, 175), fill=(200, 160, 130, 128))
+    frame.putpixel((25, 25), (255, 0, 125, 255))
+    frame.putpixel((25, 26), (255, 0, 125, 60))
+    frame.putpixel((26, 26), (255, 0, 125, 10))
+    frame.putpixel((40, 40), (250, 240, 100, 220))
+    frame.putpixel((60, 60), (255, 255, 255, 12))
+    draw.rectangle((250, 60, 255, 65), fill=(255, 250, 100, 220))
+    neighbor = frame.copy()
+    ImageDraw.Draw(neighbor).rectangle((24, 24, 27, 27), fill=(0, 0, 0, 0))
+    neighbor.putpixel((40, 40), (0, 0, 0, 0))
+    neighbor.putpixel((41, 40), (250, 240, 100, 220))
+    cleaned, count = suppress_alpha_noise(frame, [neighbor], [(60, 60, 1, 1)])
+    expected = frame.copy()
+    for point in ((25, 25), (25, 26), (26, 26)):
+        expected.putpixel(point, (*frame.getpixel(point)[:3], 0))
+    check(count == 3 and cleaned.tobytes() == expected.tobytes(),
+          "remove opaque and translucent transient specks while preserving a moving effect, connected detail and protection")
+
+
+def check_contour_matte():
+    from tools.asset_optimizer.frames import suppress_contour_matte
+
+    frame = Image.new("RGBA", (320, 320))
+    draw = ImageDraw.Draw(frame)
+    draw.rectangle((80, 80, 240, 230), fill=(225, 215, 235, 255))
+    olive = (127, 117, 89, 255)
+    draw.rectangle((135, 135, 170, 170), fill=olive)
+    draw.line((239, 120, 260, 120), fill=(220, 190, 230, 215))
+    draw.line((160, 231, 160, 237), fill=olive)
+    draw.rectangle((168, 234, 170, 236), fill=(115, 107, 85, 80))
+    frame.putpixel((172, 236), (36, 31, 30, 110))
+    frame.putpixel((190, 235), olive)
+    frame.putpixel((210, 237), (245, 222, 120, 255))
+
+    cleaned, count = suppress_contour_matte(frame, [(190, 235, 1, 1)])
+    expected = frame.copy()
+    alpha = expected.getchannel("A")
+    draw = ImageDraw.Draw(alpha)
+    draw.line((160, 232, 160, 237), fill=0)
+    draw.rectangle((168, 234, 170, 236), fill=0)
+    alpha.putpixel((172, 236), 0)
+    expected.putalpha(alpha)
+    check(count == 16 and cleaned.tobytes() == expected.tobytes(),
+          "clear connected opaque matte and detached fringe while retaining the contour, enclosed color, bright effect and protection")
 
 
 if __name__ == "__main__":

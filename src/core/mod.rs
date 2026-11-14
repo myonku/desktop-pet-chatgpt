@@ -99,6 +99,8 @@ pub enum Activity {
     Base,
     Manual,
     Auto(Route),
+    DockTravel(Route, Instant, bool),
+    DockPeek(Side),
     Drag,
 }
 

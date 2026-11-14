@@ -2,6 +2,7 @@
 /.legacy-v0.5.1/
 /assets/*
 !/assets/README.md
+!/assets/icon/
 
 /artifacts/*
 !/artifacts/README.md

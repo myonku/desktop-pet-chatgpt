@@ -9,6 +9,51 @@ use desktop_pet_chatgpt::media::{Pack, Variant};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+#[test]
+fn icon_payload_is_optional_and_rejects_invalid_directory_entries() {
+    use desktop_pet_chatgpt::media::LoadedResource;
+
+    let fixture = Fixture::create();
+    assert!(
+        fixture
+            .open()
+            .load_resource("app.icon", None)
+            .unwrap()
+            .is_none()
+    );
+    let png = include_bytes!("../src/render/alpha-color.png");
+    let mut ico = vec![0, 0, 1, 0, 1, 0, 128, 128, 0, 0, 1, 0, 32, 0];
+    ico.extend_from_slice(&(png.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22_u32.to_le_bytes());
+    ico.extend_from_slice(png);
+    let manifest_path = fixture.0.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    for valid in [true, false] {
+        if !valid {
+            ico[18..22].copy_from_slice(&u32::MAX.to_le_bytes());
+        }
+        let digest = format!("{:x}", Sha256::digest(&ico));
+        manifest["resources"][0] = json!({
+            "key": "app.icon", "content": {"kind": "icon",
+            "file": {"path": "app.ico", "sha256": digest}}
+        });
+        fs::write(&manifest_path, manifest.to_string()).unwrap();
+        fs::write(fixture.0.join("app.ico"), &ico).unwrap();
+        let pack = fixture.open();
+        assert_eq!(pack.validate_payloads().is_ok(), valid);
+        if valid {
+            let Some(LoadedResource::Icon(icon)) = pack.load_resource("app.icon", None).unwrap()
+            else {
+                panic!("missing icon");
+            };
+            assert_eq!(icon.png_for_size(32), png);
+        } else {
+            assert!(pack.load_resource("app.icon", None).is_err());
+        }
+    }
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

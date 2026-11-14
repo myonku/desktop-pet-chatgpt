@@ -1,4 +1,7 @@
-use std::{cell::Cell, time::Instant};
+use std::{
+    cell::{Cell, RefCell},
+    time::Instant,
+};
 
 use windows::{
     Win32::{
@@ -8,7 +11,10 @@ use windows::{
             ClientToScreen, CreateRectRgn, DeleteObject, ExtCreateRegion, HRGN, RDH_RECTANGLES,
             RGNDATAHEADER, SetWindowRgn,
         },
-        System::{SystemInformation::GetTickCount, SystemServices::MK_LBUTTON},
+        System::{
+            LibraryLoader::GetModuleHandleW, SystemInformation::GetTickCount,
+            SystemServices::MK_LBUTTON,
+        },
         UI::{
             HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
             Shell::{
@@ -29,12 +35,17 @@ use winit::{
     window::Window,
 };
 
-use crate::{app::AppEvent, media::frame::FrameView};
+use crate::{
+    app::AppEvent,
+    media::{PackIcon, frame::FrameView},
+};
 
 mod display;
+mod modal;
 mod preferences;
 mod session;
 pub use display::{Display, physical_size};
+pub(crate) use modal::SettingsModal;
 pub use preferences::{Autostart, LegacyPreferences, Sound, legacy_preferences, startup_command};
 pub use session::{
     Instance, confirm_config_reset, local_path, reveal_directory, show_config_error, user_profile,
@@ -50,9 +61,12 @@ pub enum Gesture {
 }
 
 const TRAY_MESSAGE: u32 = WM_APP + 1;
+const OPEN_MENU: u32 = WM_APP + 3;
 const TRAY_ID: u32 = 1;
 const NIN_KEYSELECT: u32 = NIN_SELECT | 1;
 const SUBCLASS_ID: usize = 1;
+const APP_ICON_RESOURCE: u16 = 101;
+const TRAY_ICON_RESOURCE: u16 = 102;
 
 pub enum Command {
     TogglePassthrough,
@@ -68,26 +82,37 @@ pub enum Command {
     Exit,
 }
 
-pub struct MenuState<'a> {
+pub struct MenuState {
+    pub tray: bool,
     pub passthrough: bool,
     pub visible: bool,
     pub attached: bool,
     pub auto_move: bool,
     pub sound: bool,
     pub fullscreen_hide: bool,
-    pub actions: &'a [(String, bool)],
+    pub actions: Vec<(String, bool)>,
+}
+
+struct MenuRequest {
+    position: Option<PhysicalPosition<i32>>,
+    state: MenuState,
+    ids: Vec<String>,
 }
 struct Callback {
     proxy: EventLoopProxy<AppEvent>,
     taskbar_created: u32,
     drag: Cell<Option<Drag>>,
+    edge_frame: Cell<bool>,
     trace_input: bool,
+    menu: RefCell<Option<MenuRequest>>,
+    menu_open: Cell<bool>,
 }
 
 pub struct WindowInput {
     hwnd: HWND,
     _callback: Box<Callback>,
     tray: bool,
+    tray_icon: Option<OwnedIcon>,
     instance_marker: Vec<u16>,
     hit_bounds: Option<(i32, i32, i32, i32)>,
 }
@@ -98,6 +123,7 @@ impl WindowInput {
         proxy: EventLoopProxy<AppEvent>,
         trace_input: bool,
         instance_marker: &[u16],
+        tray_icon: Option<PackIcon>,
     ) -> Result<Self, String> {
         let handle = window.window_handle().map_err(|error| error.to_string())?;
         let RawWindowHandle::Win32(handle) = handle.as_raw() else {
@@ -109,7 +135,10 @@ impl WindowInput {
             proxy,
             taskbar_created: unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) },
             drag: Cell::new(None),
+            edge_frame: Cell::new(false),
             trace_input,
+            menu: RefCell::new(None),
+            menu_open: Cell::new(false),
         });
         if !unsafe {
             SetWindowSubclass(
@@ -127,6 +156,13 @@ impl WindowInput {
             hwnd,
             _callback: callback,
             tray: false,
+            tray_icon: tray_icon.as_ref().and_then(|icon| {
+                let size =
+                    unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(hwnd)) }.max(16);
+                OwnedIcon::from_pack(icon, size)
+                    .map_err(|error| eprintln!("Could not create custom tray icon: {error}"))
+                    .ok()
+            }),
             instance_marker: instance_marker.to_vec(),
             hit_bounds: None,
         };
@@ -157,6 +193,29 @@ impl WindowInput {
 
     pub fn gesture_in_progress(&self) -> bool {
         self._callback.drag.get().is_some()
+    }
+
+    pub fn edge_frame_presented(&self) -> bool {
+        self._callback.edge_frame.get()
+    }
+
+    pub fn frame_presented(&self, edge: bool, drag_ready: bool) {
+        self._callback.edge_frame.set(edge);
+        if drag_ready
+            && let Some(mut drag) = self._callback.drag.get()
+            && let Some((cursor, started)) = drag.deferred.take()
+        {
+            // Let the compositor pick up the new pose before moving the HWND.
+            let _ = unsafe { DwmFlush() };
+            self._callback.drag.set((!drag.released).then_some(drag));
+            drag.move_window(self.hwnd, cursor, started);
+            if drag.released {
+                let _ = self
+                    ._callback
+                    .proxy
+                    .send_event(AppEvent::Gesture(Gesture::Drop));
+            }
+        }
     }
 
     pub fn settings_error(&self, message: &str) {
@@ -202,16 +261,26 @@ impl WindowInput {
     }
 
     pub fn add_tray(&mut self) {
-        // The predefined system icon is shared and does not need destruction.
         unsafe {
             let mut data = tray_data(self.hwnd);
             if self.tray {
                 let _ = Shell_NotifyIconW(NIM_DELETE, &data);
             }
             let result = (|| {
-                data.hIcon = LoadIconW(HINSTANCE::default(), IDI_APPLICATION)
-                    .map_err(|error| eprintln!("Could not load tray icon: {error}"))
-                    .ok()?;
+                let (icon, source) = if let Some(icon) = &self.tray_icon {
+                    (icon.0, "custom pack resource")
+                } else if let Ok(icon) = embedded_icon(
+                    TRAY_ICON_RESOURCE,
+                    GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(self.hwnd)),
+                ) {
+                    (icon, "embedded application resource")
+                } else {
+                    let icon = LoadIconW(HINSTANCE::default(), IDI_APPLICATION)
+                        .map_err(|error| eprintln!("Could not load tray icon: {error}"))
+                        .ok()?;
+                    (icon, "Windows system resource")
+                };
+                data.hIcon = icon;
                 data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
                 data.uCallbackMessage = TRAY_MESSAGE;
                 for (slot, ch) in data
@@ -227,6 +296,7 @@ impl WindowInput {
                 }
                 data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
                 if Shell_NotifyIconW(NIM_SETVERSION, &data).as_bool() {
+                    eprintln!("Tray icon: {source}");
                     return Some(());
                 }
                 eprintln!("Shell_NotifyIconW(NIM_SETVERSION) failed");
@@ -243,130 +313,155 @@ impl WindowInput {
     pub fn menu(
         &self,
         position: Option<PhysicalPosition<i32>>,
-        state: MenuState<'_>,
-    ) -> windows::core::Result<Option<Command>> {
-        let MenuState {
-            passthrough,
-            visible,
-            attached,
-            auto_move,
-            sound,
-            fullscreen_hide,
-            actions,
-        } = state;
-        const ACTION_START: usize = 100;
-        // The popup is owned by this HWND and dispatched on its event thread.
-        unsafe {
-            let mut point = POINT::default();
-            if let Some(position) = position {
-                point.x = position.x;
-                point.y = position.y;
-            } else {
-                GetCursorPos(&mut point)?;
-            }
-            let menu = Menu(CreatePopupMenu()?);
-            let check = if passthrough {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-            let enabled = if self.tray { MF_ENABLED } else { MF_GRAYED };
-            AppendMenuW(
-                menu.0,
-                MF_STRING | check | enabled,
-                1,
-                if self.tray {
-                    w!("全窗口鼠标穿透(&P)")
-                } else {
-                    w!("全窗口鼠标穿透（托盘不可用）")
-                },
-            )?;
-            AppendMenuW(menu.0, MF_STRING, 2, w!("退出"))?;
-            #[cfg(feature = "window-diagnostics")]
-            AppendMenuW(menu.0, MF_STRING, 3, w!("中文输入预览"))?;
-            AppendMenuW(
-                menu.0,
-                MF_STRING | enabled,
-                4,
-                if visible {
-                    w!("隐藏桌宠(&H)")
-                } else {
-                    w!("显示桌宠(&H)")
-                },
-            )?;
-            let checked = |on| if on { MF_CHECKED } else { MF_UNCHECKED };
-            AppendMenuW(menu.0, MF_STRING | checked(auto_move), 5, w!("自移动(&M)"))?;
-            let expand_enabled = if attached { MF_ENABLED } else { MF_GRAYED };
-            AppendMenuW(menu.0, MF_STRING | expand_enabled, 6, w!("展开(&E)"))?;
-            AppendMenuW(menu.0, MF_STRING, 7, w!("设置(&S)"))?;
-            AppendMenuW(menu.0, MF_STRING, 8, w!("桌宠大小"))?;
-            AppendMenuW(menu.0, MF_STRING | checked(sound), 9, w!("音效(&U)"))?;
-            AppendMenuW(
-                menu.0,
-                MF_STRING | checked(fullscreen_hide),
-                10,
-                w!("全屏隐藏(&F)"),
-            )?;
-            AppendMenuW(
-                menu.0,
-                MF_STRING | MF_GRAYED,
-                11,
-                w!("集成与会话（尚未接入）"),
-            )?;
-            AppendMenuW(menu.0, MF_STRING | MF_GRAYED, 12, w!("历史（尚未接入）"))?;
-            let submenu = Menu(CreatePopupMenu()?);
-            for (index, (label, enabled)) in actions.iter().enumerate() {
-                let label: Vec<u16> = label.encode_utf16().chain([0]).collect();
-                let state = if *enabled { MF_ENABLED } else { MF_GRAYED };
-                AppendMenuW(
-                    submenu.0,
-                    MF_STRING | state,
-                    ACTION_START + index,
-                    PCWSTR(label.as_ptr()),
-                )?;
-            }
-            AppendMenuW(menu.0, MF_POPUP, submenu.0.0 as usize, w!("动作预览(&A)"))?;
-            // The parent menu destroys the attached submenu.
-            std::mem::forget(submenu);
-            let previous = GetForegroundWindow();
-            let _ = SetForegroundWindow(self.hwnd);
-            let selected = TrackPopupMenu(
-                menu.0,
-                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-                point.x,
-                point.y,
-                0,
-                self.hwnd,
-                None,
-            );
-            let _ = PostMessageW(self.hwnd, WM_NULL, WPARAM(0), LPARAM(0));
-            if !previous.is_invalid() && previous != self.hwnd && GetForegroundWindow() == self.hwnd
-            {
-                let _ = SetForegroundWindow(previous);
-            }
-            Ok(match selected.0 {
-                1 if self.tray => Some(Command::TogglePassthrough),
-                2 => Some(Command::Exit),
-                #[cfg(feature = "window-diagnostics")]
-                3 => Some(Command::OpenPreview),
-                4 if self.tray => Some(Command::ToggleVisibility),
-                5 => Some(Command::ToggleAuto),
-                6 if attached => Some(Command::Expand),
-                7 | 8 => Some(Command::OpenSettings),
-                9 => Some(Command::ToggleSound),
-                10 => Some(Command::ToggleFullscreen),
-                id if id >= ACTION_START as i32
-                    && actions
-                        .get(id as usize - ACTION_START)
-                        .is_some_and(|(_, enabled)| *enabled) =>
-                {
-                    Some(Command::Action(id as usize - ACTION_START))
-                }
-                _ => None,
-            })
+        state: MenuState,
+        ids: Vec<String>,
+    ) -> windows::core::Result<()> {
+        let callback = &self._callback;
+        if callback.menu_open.get() || callback.menu.borrow().is_some() {
+            return Ok(());
         }
+        callback.menu.replace(Some(MenuRequest {
+            position,
+            state,
+            ids,
+        }));
+        // Dispatch after returning from the winit handler so modal messages can reach it.
+        let result = unsafe { PostMessageW(self.hwnd, OPEN_MENU, WPARAM(0), LPARAM(0)) };
+        if result.is_err() {
+            callback.menu.take();
+        }
+        result
     }
+}
 
+fn track_menu(
+    hwnd: HWND,
+    position: Option<PhysicalPosition<i32>>,
+    state: MenuState,
+) -> windows::core::Result<Option<Command>> {
+    let MenuState {
+        tray,
+        passthrough,
+        visible,
+        attached,
+        auto_move,
+        sound,
+        fullscreen_hide,
+        actions,
+    } = state;
+    const ACTION_START: usize = 100;
+    // The popup is owned by this HWND and dispatched on its event thread.
+    unsafe {
+        let mut point = POINT::default();
+        if let Some(position) = position {
+            point.x = position.x;
+            point.y = position.y;
+        } else {
+            GetCursorPos(&mut point)?;
+        }
+        let menu = Menu(CreatePopupMenu()?);
+        let check = if passthrough {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+        let enabled = if tray { MF_ENABLED } else { MF_GRAYED };
+        AppendMenuW(
+            menu.0,
+            MF_STRING | check | enabled,
+            1,
+            if tray {
+                w!("全窗口鼠标穿透(&P)")
+            } else {
+                w!("全窗口鼠标穿透（托盘不可用）")
+            },
+        )?;
+        AppendMenuW(menu.0, MF_STRING, 2, w!("退出"))?;
+        #[cfg(feature = "window-diagnostics")]
+        AppendMenuW(menu.0, MF_STRING, 3, w!("中文输入预览"))?;
+        AppendMenuW(
+            menu.0,
+            MF_STRING | enabled,
+            4,
+            if visible {
+                w!("隐藏桌宠(&H)")
+            } else {
+                w!("显示桌宠(&H)")
+            },
+        )?;
+        let checked = |on| if on { MF_CHECKED } else { MF_UNCHECKED };
+        AppendMenuW(menu.0, MF_STRING | checked(auto_move), 5, w!("自移动(&M)"))?;
+        let expand_enabled = if attached { MF_ENABLED } else { MF_GRAYED };
+        AppendMenuW(menu.0, MF_STRING | expand_enabled, 6, w!("展开(&E)"))?;
+        AppendMenuW(menu.0, MF_STRING, 7, w!("设置(&S)"))?;
+        AppendMenuW(menu.0, MF_STRING, 8, w!("桌宠大小"))?;
+        AppendMenuW(menu.0, MF_STRING | checked(sound), 9, w!("音效(&U)"))?;
+        AppendMenuW(
+            menu.0,
+            MF_STRING | checked(fullscreen_hide),
+            10,
+            w!("全屏隐藏(&F)"),
+        )?;
+        AppendMenuW(
+            menu.0,
+            MF_STRING | MF_GRAYED,
+            11,
+            w!("集成与会话（尚未接入）"),
+        )?;
+        AppendMenuW(menu.0, MF_STRING | MF_GRAYED, 12, w!("历史（尚未接入）"))?;
+        let submenu = Menu(CreatePopupMenu()?);
+        for (index, (label, enabled)) in actions.iter().enumerate() {
+            let label: Vec<u16> = label.encode_utf16().chain([0]).collect();
+            let state = if *enabled { MF_ENABLED } else { MF_GRAYED };
+            AppendMenuW(
+                submenu.0,
+                MF_STRING | state,
+                ACTION_START + index,
+                PCWSTR(label.as_ptr()),
+            )?;
+        }
+        AppendMenuW(menu.0, MF_POPUP, submenu.0.0 as usize, w!("动作预览(&A)"))?;
+        // The parent menu destroys the attached submenu.
+        std::mem::forget(submenu);
+        let previous = GetForegroundWindow();
+        let _ = SetForegroundWindow(hwnd);
+        let selected = TrackPopupMenu(
+            menu.0,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+            point.x,
+            point.y,
+            0,
+            hwnd,
+            None,
+        );
+        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        if !previous.is_invalid() && previous != hwnd && GetForegroundWindow() == hwnd {
+            let _ = SetForegroundWindow(previous);
+        }
+        Ok(match selected.0 {
+            1 if tray => Some(Command::TogglePassthrough),
+            2 => Some(Command::Exit),
+            #[cfg(feature = "window-diagnostics")]
+            3 => Some(Command::OpenPreview),
+            4 if tray => Some(Command::ToggleVisibility),
+            5 => Some(Command::ToggleAuto),
+            6 if attached => Some(Command::Expand),
+            7 | 8 => Some(Command::OpenSettings),
+            9 => Some(Command::ToggleSound),
+            10 => Some(Command::ToggleFullscreen),
+            id if id >= ACTION_START as i32
+                && actions
+                    .get(id as usize - ACTION_START)
+                    .is_some_and(|(_, enabled)| *enabled) =>
+            {
+                Some(Command::Action(id as usize - ACTION_START))
+            }
+            _ => None,
+        })
+    }
+}
+
+impl WindowInput {
     pub fn invalidate_hit_region(&mut self) {
         self.hit_bounds = None;
     }
@@ -465,6 +560,8 @@ struct Drag {
     x_threshold: u32,
     y_threshold: u32,
     moving: bool,
+    deferred: Option<(POINT, Option<u32>)>,
+    released: bool,
 }
 
 impl Drag {
@@ -485,30 +582,57 @@ impl Drag {
                 x_threshold: GetSystemMetricsForDpi(SM_CXDRAG, dpi).max(1) as u32,
                 y_threshold: GetSystemMetricsForDpi(SM_CYDRAG, dpi).max(1) as u32,
                 moving: false,
+                deferred: None,
+                released: false,
             })
         }
     }
 
-    fn update(mut self, hwnd: HWND, position: LPARAM) -> Self {
+    fn update(mut self, callback: &Callback, hwnd: HWND, position: LPARAM) {
         let mut cursor = message_point(position.0 as usize);
         // Handle the move while dispatching its native message, before a queued
         // button-up can make the cursor or button state refer to a later event.
         unsafe {
             if !ClientToScreen(hwnd, &mut cursor).as_bool() {
-                return self;
-            }
-            self.moving |= cursor.x.abs_diff(self.start.x) > self.x_threshold
-                || cursor.y.abs_diff(self.start.y) > self.y_threshold;
-            if self.moving {
-                let dpi = GetDpiForWindow(hwnd).max(1);
-                self.place_at_cursor(hwnd, cursor, dpi);
-                let current_dpi = GetDpiForWindow(hwnd).max(1);
-                if current_dpi != dpi {
-                    self.place_at_cursor(hwnd, cursor, current_dpi);
-                }
+                return;
             }
         }
-        self
+        let started = !self.moving
+            && (cursor.x.abs_diff(self.start.x) > self.x_threshold
+                || cursor.y.abs_diff(self.start.y) > self.y_threshold);
+        self.moving |= started;
+        let message_time = callback
+            .trace_input
+            .then(|| unsafe { GetMessageTime() as u32 });
+        if self.deferred.is_some() || (started && callback.edge_frame.get()) {
+            self.deferred = Some((cursor, message_time));
+        }
+        callback.drag.set(Some(self));
+        if started {
+            let _ = callback
+                .proxy
+                .send_event(AppEvent::Gesture(Gesture::DragStarted));
+        }
+        if self.moving && self.deferred.is_none() {
+            self.move_window(hwnd, cursor, message_time);
+        }
+    }
+
+    fn move_window(self, hwnd: HWND, cursor: POINT, started: Option<u32>) {
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd).max(1);
+            self.place_at_cursor(hwnd, cursor, dpi);
+            let current_dpi = GetDpiForWindow(hwnd).max(1);
+            if current_dpi != dpi {
+                self.place_at_cursor(hwnd, cursor, current_dpi);
+            }
+            if let Some(started) = started
+                && DwmFlush().is_ok()
+            {
+                let latency = GetTickCount().wrapping_sub(started);
+                eprintln!("Drag compositor flush: {latency} ms");
+            }
+        }
     }
 
     fn place_at_cursor(self, hwnd: HWND, cursor: POINT, dpi: u32) {
@@ -551,6 +675,67 @@ impl Drop for WindowInput {
             let _ = RemovePropW(self.hwnd, PCWSTR(self.instance_marker.as_ptr()));
             let _ = RemoveWindowSubclass(self.hwnd, Some(window_proc), SUBCLASS_ID);
         }
+    }
+}
+
+fn embedded_icon(id: u16, size: i32) -> windows::core::Result<HICON> {
+    // Shared resource handles stay owned by the executable module.
+    let module = unsafe { GetModuleHandleW(None) }?;
+    let handle = unsafe {
+        LoadImageW(
+            HINSTANCE(module.0),
+            PCWSTR(usize::from(id) as *const u16),
+            IMAGE_ICON,
+            size,
+            size,
+            LR_SHARED | LR_DEFAULTCOLOR,
+        )
+    }?;
+    Ok(HICON(handle.0))
+}
+
+pub(crate) fn apply_embedded_window_icons(window: &Window) {
+    let Ok(handle) = window.window_handle() else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd);
+        for (kind, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
+            if let Ok(icon) = embedded_icon(APP_ICON_RESOURCE, GetSystemMetricsForDpi(metric, dpi))
+            {
+                SendMessageW(
+                    hwnd,
+                    WM_SETICON,
+                    WPARAM(kind as usize),
+                    LPARAM(icon.0 as isize),
+                );
+            }
+        }
+    }
+}
+
+struct OwnedIcon(HICON);
+
+impl OwnedIcon {
+    fn from_pack(icon: &PackIcon, size: i32) -> windows::core::Result<Self> {
+        let png = icon.png_for_size(size as u32);
+        let mut words = vec![0_u32; png.len().div_ceil(4)];
+        // Win32 requires DWORD alignment for the input resource bytes.
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(words.as_mut_ptr().cast::<u8>(), png.len()) };
+        bytes.copy_from_slice(png);
+        unsafe { CreateIconFromResourceEx(bytes, true, 0x0003_0000, size, size, LR_DEFAULTCOLOR) }
+            .map(Self)
+    }
+}
+
+impl Drop for OwnedIcon {
+    fn drop(&mut self) {
+        let _ = unsafe { DestroyIcon(self.0) };
     }
 }
 
@@ -635,6 +820,29 @@ unsafe extern "system" fn window_proc(
         return LRESULT(MA_NOACTIVATE as isize);
     }
     match message {
+        OPEN_MENU => {
+            if let Some(request) = callback.menu.take() {
+                callback.menu_open.set(true);
+                modal::start(hwnd);
+                let result = track_menu(hwnd, request.position, request.state);
+                modal::stop(hwnd);
+                callback.menu_open.set(false);
+                match result {
+                    Ok(Some(command)) => {
+                        let _ = callback
+                            .proxy
+                            .send_event(AppEvent::MenuSelected(command, request.ids));
+                    }
+                    Ok(None) => {}
+                    Err(error) => eprintln!("Could not open menu: {error}"),
+                }
+            }
+            return LRESULT(0);
+        }
+        WM_TIMER if wparam.0 == modal::TIMER => {
+            let _ = callback.proxy.send_event(AppEvent::ModalTick);
+            return LRESULT(0);
+        }
         session::ACTIVATE_MESSAGE => {
             let _ = callback.proxy.send_event(AppEvent::OpenSettings);
             return LRESULT(0);
@@ -643,47 +851,42 @@ unsafe extern "system" fn window_proc(
             let _ = callback.proxy.send_event(AppEvent::ResumeDisplay);
         }
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            if callback.drag.get().is_some_and(|drag| drag.released) {
+                let _ = callback
+                    .proxy
+                    .send_event(AppEvent::Gesture(Gesture::Cancel));
+            }
             callback.drag.set(Drag::start(hwnd, lparam));
             let _ = callback.proxy.send_event(AppEvent::Gesture(Gesture::Press));
         }
         WM_MOUSEMOVE if wparam.0 & MK_LBUTTON.0 as usize != 0 => {
-            if let Some(drag) = callback.drag.get() {
-                let started = callback
-                    .trace_input
-                    .then(|| unsafe { GetMessageTime() as u32 });
-                let was_moving = drag.moving;
-                let drag = drag.update(hwnd, lparam);
-                if drag.moving && !was_moving {
-                    let _ = callback
-                        .proxy
-                        .send_event(AppEvent::Gesture(Gesture::DragStarted));
-                }
-                callback.drag.set(Some(drag));
-                if let Some(started) = started
-                    && drag.moving
-                    && unsafe { DwmFlush() }.is_ok()
-                {
-                    let latency = unsafe { GetTickCount() }.wrapping_sub(started);
-                    eprintln!("Drag compositor flush: {latency} ms");
-                }
+            if let Some(drag) = callback.drag.get().filter(|drag| !drag.released) {
+                drag.update(callback, hwnd, lparam);
             }
         }
         WM_LBUTTONUP => {
-            if let Some(drag) = callback.drag.take() {
-                let gesture = if drag.moving {
-                    Gesture::Drop
+            if let Some(mut drag) = callback.drag.take() {
+                if drag.deferred.is_some() {
+                    drag.released = true;
+                    callback.drag.set(Some(drag));
                 } else {
-                    let tolerance = unsafe {
-                        [
-                            GetSystemMetricsForDpi(SM_CXDOUBLECLK, drag.dpi) as u32 / 2,
-                            GetSystemMetricsForDpi(SM_CYDOUBLECLK, drag.dpi) as u32 / 2,
-                        ]
+                    let gesture = if drag.moving {
+                        Gesture::Drop
+                    } else {
+                        let tolerance = unsafe {
+                            [
+                                GetSystemMetricsForDpi(SM_CXDOUBLECLK, drag.dpi) as u32 / 2,
+                                GetSystemMetricsForDpi(SM_CYDOUBLECLK, drag.dpi) as u32 / 2,
+                            ]
+                        };
+                        Gesture::Click(Instant::now(), [drag.start.x, drag.start.y], tolerance)
                     };
-                    Gesture::Click(Instant::now(), [drag.start.x, drag.start.y], tolerance)
-                };
-                let _ = callback.proxy.send_event(AppEvent::Gesture(gesture));
+                    let _ = callback.proxy.send_event(AppEvent::Gesture(gesture));
+                }
             }
         }
+        WM_MOUSEMOVE | WM_CAPTURECHANGED
+            if callback.drag.get().is_some_and(|drag| drag.released) => {}
         WM_MOUSEMOVE | WM_CANCELMODE | WM_CAPTURECHANGED if callback.drag.take().is_some() => {
             let _ = callback
                 .proxy

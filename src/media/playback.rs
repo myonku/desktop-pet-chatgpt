@@ -174,11 +174,43 @@ struct Animation {
     directions: [bool; 2],
 }
 
+impl Animation {
+    fn next_page(&self, frame: usize, once: bool) -> Option<usize> {
+        let page = self.frames[frame].0;
+        self.frames[frame + 1..]
+            .iter()
+            .find(|next| next.0 != page)
+            .map(|next| next.0)
+            .or_else(|| {
+                let first = self.frames[0].0;
+                (!once && self.timeline.looping && first != page).then_some(first)
+            })
+    }
+
+    fn shares_pose_frames(&self, other: &Self) -> bool {
+        self.frames == other.frames
+            && self.timeline.ends == other.timeline.ends
+            && self.canvas.size == other.canvas.size
+            && self.canvas.scale == other.canvas.scale
+            && self.canvas.anchor == other.canvas.anchor
+            && self.canvas.offset[1] == other.canvas.offset[1]
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Selected {
+    action: usize,
     sequence: u128,
     rect: [u32; 4],
     canvas: Canvas,
+}
+
+const POSE_SLIDE: Duration = Duration::from_millis(180);
+const POSE_UPDATE: Duration = Duration::from_millis(16);
+
+struct PoseSlide {
+    from_x: f32,
+    start: Option<Instant>,
 }
 
 pub struct Playback {
@@ -195,6 +227,7 @@ pub struct Playback {
     failed: Option<(usize, io::Error)>,
     selected: Option<Selected>,
     present_sequence: Option<u128>,
+    pose_slide: Option<PoseSlide>,
     pack_id: String,
     announced: bool,
 }
@@ -293,6 +326,7 @@ impl Playback {
             failed: None,
             selected: None,
             present_sequence: None,
+            pose_slide: None,
         })
     }
 
@@ -349,6 +383,74 @@ impl Playback {
         true
     }
 
+    pub(crate) fn switch_pose(&mut self, target: &str, previous: &str, now: Instant) -> bool {
+        let Some(index) = self.actions.iter().position(|action| action.id == target) else {
+            return false;
+        };
+        if !self.once && self.active == index {
+            return true;
+        }
+        let source = &self.actions[self.active];
+        let destination = &self.actions[index];
+        if self.once
+            || source.id != previous
+            || !source.timeline.looping
+            || !destination.timeline.looping
+            || source.timeline.ends != destination.timeline.ends
+            || self.present_sequence.is_none()
+        {
+            return self.play(Some(target), false);
+        }
+        let shared_frames = source.frames == destination.frames;
+        let from = self.selected.unwrap().canvas;
+        let to = destination.canvas;
+        let compatible_slide = source.shares_pose_frames(destination);
+        if !shared_frames || self.waiting.is_some() {
+            // Older packs bake each crop into separate pages. Keep their phase while
+            // the matching page loads, but leave their authored geometry intact.
+            let epoch = self
+                .waiting
+                .map_or(self.epoch, |(_, elapsed)| now.checked_sub(elapsed));
+            self.pause();
+            self.epoch = epoch;
+        }
+        self.active = index;
+        self.present_sequence = None;
+        self.pose_slide =
+            (compatible_slide && from.offset[0] != to.offset[0]).then_some(PoseSlide {
+                from_x: from.offset[0],
+                start: Some(now),
+            });
+        true
+    }
+
+    pub(crate) fn enter_pose(&mut self, edge: &str, peek: &str) {
+        if self.play(Some(edge), false) {
+            let edge = &self.actions[self.active];
+            self.pose_slide = self
+                .actions
+                .iter()
+                .find(|action| {
+                    action.id == peek
+                        && edge.shares_pose_frames(action)
+                        && edge.canvas.offset[0] != action.canvas.offset[0]
+                })
+                .map(|action| PoseSlide {
+                    from_x: action.canvas.offset[0],
+                    start: None,
+                });
+        }
+    }
+
+    pub(crate) fn sliding_pose(&self) -> bool {
+        self.pose_slide.is_some()
+    }
+
+    pub(crate) fn selected_id(&self) -> Option<&str> {
+        self.selected
+            .map(|frame| self.actions[frame.action].id.as_str())
+    }
+
     pub fn active_id(&self) -> &str {
         &self.actions[self.active].id
     }
@@ -363,6 +465,7 @@ impl Playback {
         self.waiting = None;
         self.ready = None;
         self.failed = None;
+        self.pose_slide = None;
     }
 
     pub fn use_compatible_format(&mut self) {
@@ -488,31 +591,48 @@ impl Playback {
             .present_sequence
             .replace(sequence)
             .is_none_or(|previous| previous % frame_count != frame as u128);
+        let mut canvas = action.canvas;
+        let mut slide_deadline = None;
+        if let Some(slide) = &mut self.pose_slide {
+            let elapsed = now - *slide.start.get_or_insert(now);
+            if elapsed >= POSE_SLIDE {
+                self.pose_slide = None;
+            } else {
+                let t = elapsed.as_secs_f32() / POSE_SLIDE.as_secs_f32();
+                let eased = t * t * (3.0 - 2.0 * t);
+                canvas.offset[0] = slide.from_x + (canvas.offset[0] - slide.from_x) * eased;
+                slide_deadline = Some(now + POSE_UPDATE.min(POSE_SLIDE - elapsed));
+            }
+        }
+        changed |= self
+            .selected
+            .is_some_and(|selected| selected.canvas.offset != canvas.offset);
         self.selected = Some(Selected {
+            action: self.active,
             sequence,
             rect,
-            canvas: action.canvas,
+            canvas,
         });
         let finished = (self.once || !action.timeline.looping) && elapsed >= total;
-        if !finished && self.ready.is_none() {
-            let next = (frame + 1) % action.frames.len();
-            let next_page = action.frames[next].0;
-            if (next != 0 || (!self.once && action.timeline.looping))
-                && next_page != page
-                && self
-                    .failed
-                    .as_ref()
-                    .is_none_or(|(index, _)| *index != next_page)
-            {
-                self.source.request(next_page, self.variant, None)?;
-            }
+        if !finished
+            && self.ready.is_none()
+            && let Some(next_page) = action.next_page(frame, self.once)
+            && self
+                .failed
+                .as_ref()
+                .is_none_or(|(index, _)| *index != next_page)
+        {
+            self.source.request(next_page, self.variant, None)?;
         }
         Ok(PlaybackTick {
             changed,
             deadline: (!finished)
                 .then_some(delay)
                 .flatten()
-                .map(|delay| now + delay),
+                .map(|delay| now + delay)
+                .into_iter()
+                .chain(slide_deadline)
+                .min(),
             elapsed: Some(if self.once || !action.timeline.looping {
                 elapsed.min(total)
             } else {

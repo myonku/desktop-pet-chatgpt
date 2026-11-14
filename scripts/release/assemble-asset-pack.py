@@ -20,7 +20,7 @@ def payload_paths(manifest):
                 yield page[variant]["path"]
     for resource in manifest["resources"]:
         content = resource["content"]
-        if content["kind"] in ("audio", "text"):
+        if content["kind"] in ("audio", "icon", "text"):
             yield content["file"]["path"]
 
 

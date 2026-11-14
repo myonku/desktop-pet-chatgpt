@@ -80,12 +80,12 @@ impl Scene {
             self.pet.peek = false;
             self.pet.reset(now);
             self.play_base();
-        } else if changed && matches!(self.pet.activity, Activity::Auto(_)) {
+        } else if changed && self.moving() {
             self.finish(now);
         }
         let size = Self::target_size(&self.window, display, self.runtime.size.dip());
         if self.applied_size != Some(size) || self.window.inner_size() != size {
-            if matches!(self.pet.activity, Activity::Auto(_)) {
+            if self.moving() {
                 self.finish(now);
             }
             let _ = self.window.request_inner_size(size);
@@ -120,8 +120,108 @@ impl Scene {
         self.play_base();
     }
 
+    fn moving(&self) -> bool {
+        matches!(
+            self.pet.activity,
+            Activity::Auto(_) | Activity::DockTravel(..)
+        )
+    }
+
+    fn set_peek(&mut self, side: Side, peek: bool, now: Instant) {
+        let previous = side.pose(self.pet.peek);
+        self.pet.peek = peek;
+        self.pet.finish(now);
+        let target = side.pose(peek);
+        if self.available(target) {
+            self.playback
+                .as_mut()
+                .unwrap()
+                .switch_pose(target, previous, now);
+        } else {
+            self.play_base();
+        }
+    }
+
+    fn preview_dock(&mut self, side: Side, peek: bool, now: Instant) {
+        let (Some(display), Some(position)) = (self.input.display(), self.position()) else {
+            return;
+        };
+        self.pet.cancel_click();
+        if self.pet.edge == Some(side) {
+            self.set_peek(side, peek, now);
+            return;
+        }
+        self.display = Some(display);
+        let size = self.size();
+        let start = display.work.clamp(position, size);
+        self.pet.edge = None;
+        self.pet.peek = false;
+        self.play_base();
+        let distance = start[0].abs_diff(display.work.edge(side, size[0]));
+        let seconds = (f64::from(distance) / (850.0 * self.window.scale_factor())).clamp(0.25, 3.0);
+        self.travel_to_edge(
+            side,
+            peek,
+            start,
+            distance,
+            Duration::from_secs_f64(seconds),
+            now,
+        );
+    }
+
+    fn travel_to_edge(
+        &mut self,
+        side: Side,
+        peek: bool,
+        start: [i32; 2],
+        distance: u32,
+        duration: Duration,
+        now: Instant,
+    ) {
+        let route = Route {
+            side,
+            start,
+            distance: distance as i32,
+            window_us: [
+                0,
+                if distance == 0 {
+                    1
+                } else {
+                    duration.as_micros() as u64
+                },
+            ],
+        };
+        self.pet.activity = Activity::DockTravel(route, now, peek);
+    }
+
+    fn arrive_at_edge(&mut self, side: Side, peek: bool, now: Instant) {
+        self.pet.edge = Some(side);
+        self.pet.peek = peek && !self.available(side.pose(false));
+        self.pet.finish(now);
+        let edge = side.pose(false);
+        if self.available(edge) {
+            self.playback
+                .as_mut()
+                .unwrap()
+                .enter_pose(edge, side.pose(true));
+            if peek {
+                self.pet.activity = Activity::DockPeek(side);
+            }
+        } else {
+            self.play_base();
+        }
+    }
+
     fn preview_action(&mut self, id: &str) {
         if self.visible && self.pet.activity != Activity::Drag && self.available(id) {
+            for side in [Side::Left, Side::Right] {
+                for peek in [false, true] {
+                    if id == side.pose(peek) {
+                        self.preview_dock(side, peek, Instant::now());
+                        return;
+                    }
+                }
+            }
             self.pet.cancel_click();
             self.pet.activity = Activity::Manual;
             self.playback.as_mut().unwrap().play(Some(id), true);
@@ -142,8 +242,10 @@ impl Scene {
             }
             Click::Peek => {
                 self.play_click_sound();
-                self.pet.peek = !self.pet.peek;
-                self.finish(Instant::now());
+                let Some(side) = self.pet.edge else {
+                    return;
+                };
+                self.set_peek(side, !self.pet.peek, Instant::now());
             }
         }
     }
@@ -155,8 +257,10 @@ impl Scene {
         let now = Instant::now();
         match gesture {
             Gesture::Press => {
-                if matches!(self.pet.activity, Activity::Auto(_)) {
+                if self.moving() {
                     self.finish(now);
+                } else if matches!(self.pet.activity, Activity::DockPeek(_)) {
+                    self.pet.finish(now);
                 }
             }
             Gesture::Click(at, point, tolerance) => {
@@ -181,16 +285,26 @@ impl Scene {
                     let size = self.size();
                     let point = display.work.clamp(point, size);
                     let threshold = (16.0 * self.window.scale_factor()).round() as i32;
-                    self.pet.edge = display.work.snap(point[0], size[0], threshold);
+                    let side = display.work.snap(point[0], size[0], threshold);
                     if self.trace.is_some() {
-                        eprintln!("Drop: {:?} at {point:?}", self.pet.edge);
+                        eprintln!("Drop: {side:?} at {point:?}");
+                    }
+                    if let Some(side) = side {
+                        let distance = point[0].abs_diff(display.work.edge(side, size[0]));
+                        self.travel_to_edge(
+                            side,
+                            false,
+                            point,
+                            distance,
+                            Duration::from_millis(120),
+                            now,
+                        );
+                        return;
                     }
                 }
                 self.finish(now);
                 self.update_display(now);
-                if self.pet.edge.is_none() {
-                    self.preview_action("land");
-                }
+                self.preview_action("land");
             }
             Gesture::Cancel => {
                 self.pet.cancel_click();
@@ -276,6 +390,21 @@ impl Scene {
             return Ok(Some(deadline));
         }
         if !self.input.gesture_in_progress() {
+            if let Activity::DockTravel(route, started, peek) = self.pet.activity {
+                if self.input.edge_frame_presented() {
+                    // The previous pose can still be on screen while idle loads.
+                    self.pet.activity = Activity::DockTravel(route, now, peek);
+                    deadline = deadline.min(now + MOVE_INTERVAL);
+                } else {
+                    let elapsed = now.saturating_duration_since(started);
+                    self.place(route.position(elapsed));
+                    if elapsed >= Duration::from_micros(route.window_us[1]) {
+                        self.arrive_at_edge(route.side, peek, now);
+                    } else {
+                        deadline = deadline.min(now + MOVE_INTERVAL);
+                    }
+                }
+            }
             if let Some(click) = self.pet.take_click(now) {
                 self.click(click);
             }
@@ -301,6 +430,14 @@ impl Scene {
                     self.playback_failed(now, error)?;
                     return Ok(Some(now));
                 }
+                if let Activity::DockPeek(side) = self.pet.activity
+                    && tick.elapsed.is_some()
+                    && !self.input.gesture_in_progress()
+                    && !self.playback.as_ref().unwrap().sliding_pose()
+                {
+                    self.set_peek(side, true, now);
+                    return Ok(Some(now));
+                }
                 if let (Activity::Auto(route), Some(elapsed)) = (self.pet.activity, tick.elapsed)
                     && !self.input.gesture_in_progress()
                 {
@@ -316,7 +453,10 @@ impl Scene {
                     }
                 }
                 if tick.finished {
-                    if matches!(self.pet.activity, Activity::Base | Activity::Drag) {
+                    if matches!(
+                        self.pet.activity,
+                        Activity::Base | Activity::Drag | Activity::DockTravel(..)
+                    ) {
                         // A non-looping edge asset holds its last pose until the next gesture.
                         return Ok(Some(deadline));
                     }
@@ -344,7 +484,11 @@ impl Scene {
         let id = playback.active_id().to_owned();
         eprintln!("Action {id} unavailable: {error}");
         self.unavailable.insert(id);
-        if self.pet.activity == Activity::Drag {
+        if let Activity::DockPeek(side) = self.pet.activity {
+            self.set_peek(side, true, now);
+            return Ok(());
+        }
+        if matches!(self.pet.activity, Activity::Drag | Activity::DockTravel(..)) {
             self.play_base();
         } else {
             self.finish(now);
@@ -352,12 +496,8 @@ impl Scene {
         Ok(())
     }
 
-    pub(super) fn menu(&mut self, position: Option<PhysicalPosition<i32>>) -> Option<Command> {
-        let now = Instant::now();
+    pub(super) fn menu(&mut self, position: Option<PhysicalPosition<i32>>) {
         self.pet.cancel_click();
-        if matches!(self.pet.activity, Activity::Auto(_)) {
-            self.finish(now);
-        }
         let mut ids = vec![
             INTERACT,
             Side::Left.movement(),
@@ -384,10 +524,10 @@ impl Scene {
                     INTERACT => "互动",
                     "move-left" => "向左移动(&L)",
                     "move-right" => "向右移动(&R)",
-                    "edge-left" => "左侧吸边",
-                    "edge-right" => "右侧吸边",
-                    "peek-left" => "左侧探头",
-                    "peek-right" => "右侧探头",
+                    "edge-left" => "左侧吸边(&1)",
+                    "edge-right" => "右侧吸边(&2)",
+                    "peek-left" => "左侧探头(&3)",
+                    "peek-right" => "右侧探头(&4)",
                     "drag" => "拖拽",
                     "land" => "落地",
                     _ => id,
@@ -403,26 +543,37 @@ impl Scene {
                 (label, present && self.visible)
             })
             .collect();
-        match self.input.menu(
+        if let Err(error) = self.input.menu(
             position,
             MenuState {
+                tray: self.input.has_tray(),
                 passthrough: self.passthrough,
                 visible: !self.pet.manual_hidden,
                 attached: self.pet.edge.is_some(),
                 auto_move: self.pet.auto_enabled,
                 sound: self.runtime.preferences.sound,
                 fullscreen_hide: self.runtime.preferences.fullscreen_hide,
-                actions: &entries,
+                actions: entries,
             },
+            ids,
         ) {
-            Ok(Some(Command::ToggleVisibility)) => {
+            eprintln!("Could not open menu: {error}");
+        }
+    }
+
+    pub(super) fn menu_selected(&mut self, command: Command, ids: &[String]) -> Option<Command> {
+        match command {
+            Command::ToggleVisibility => {
                 self.pet.manual_hidden = !self.pet.manual_hidden;
                 self.update_display(Instant::now());
             }
-            Ok(Some(Command::Expand)) => self.expand(Instant::now()),
-            Ok(Some(Command::Action(index))) => self.preview_action(&ids[index]),
-            Ok(command) => return command,
-            Err(error) => eprintln!("Could not open menu: {error}"),
+            Command::Expand => self.expand(Instant::now()),
+            Command::Action(index) => {
+                if let Some(id) = ids.get(index) {
+                    self.preview_action(id);
+                }
+            }
+            command => return Some(command),
         }
         None
     }

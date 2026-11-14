@@ -112,6 +112,7 @@ fn test_player() -> (Playback, mpsc::Receiver<Request>) {
         failed: None,
         selected: None,
         present_sequence: None,
+        pose_slide: None,
         pack_id: "test".into(),
         announced: false,
     };
@@ -133,6 +134,28 @@ fn ready(request: Request) -> PageResult {
             variant: Variant::Png,
         }),
     }
+}
+
+#[test]
+fn prefetch_starts_at_first_frame_of_a_shared_page() {
+    let (mut player, receiver) = test_player();
+    let idle = &mut player.actions[player.base];
+    idle.frames.insert(1, idle.frames[0]);
+    idle.timeline.ends = vec![100_000, 200_000, 300_000];
+    let now = Instant::now();
+    player.tick(now).unwrap();
+    player.accept(ready(receiver.try_recv().unwrap()));
+    player.tick(now).unwrap();
+    let next = receiver.try_recv().unwrap();
+    assert_eq!(next.index, 1);
+    player.accept(ready(next));
+    assert!(
+        player
+            .tick(now + Duration::from_millis(200))
+            .unwrap()
+            .changed
+    );
+    assert_eq!(receiver.try_recv().unwrap().index, 0);
 }
 
 #[test]
@@ -193,4 +216,60 @@ fn first_page_wait_is_bounded_and_a_retry_keeps_the_prior_frame() {
     assert_eq!(player.frame().unwrap().0.index, 0);
     player.play(None, false);
     assert!(player.tick(now + PAGE_TIMEOUT).unwrap().changed);
+}
+
+#[test]
+fn paired_pose_slide_keeps_phase_and_can_reverse_without_a_position_jump() {
+    let (mut player, receiver) = test_player();
+    let mut edge = Animation {
+        id: "edge-right".into(),
+        timeline: Timeline {
+            ends: vec![100_000, 200_000],
+            looping: true,
+        },
+        frames: vec![(0, [0, 0, 1, 1]), (0, [0, 0, 1, 1])],
+        canvas: Canvas::untransformed([1, 1]),
+        movement: None,
+        directions: [false; 2],
+    };
+    edge.canvas.offset[0] = 0.25;
+    let mut peek = Animation {
+        id: "peek-right".into(),
+        timeline: Timeline {
+            ends: edge.timeline.ends.clone(),
+            looping: true,
+        },
+        frames: edge.frames.clone(),
+        canvas: edge.canvas,
+        movement: None,
+        directions: [false; 2],
+    };
+    peek.canvas.offset[0] = 0.0;
+    player.actions.extend([edge, peek]);
+    let start = Instant::now();
+    player.play(Some("edge-right"), false);
+    player.tick(start).unwrap();
+    player.accept(ready(receiver.try_recv().unwrap()));
+    player.tick(start).unwrap();
+    let click = start + Duration::from_millis(130);
+    player.tick(click).unwrap();
+
+    assert!(player.switch_pose("peek-right", "edge-right", click));
+    assert_eq!(
+        player.tick(click).unwrap().deadline,
+        Some(click + POSE_UPDATE)
+    );
+    assert_eq!(player.sequence(), Some(1));
+    assert_eq!(player.frame().unwrap().1.canvas.offset[0], 0.25);
+    let halfway = click + POSE_SLIDE / 2;
+    assert!(player.tick(halfway).unwrap().changed);
+    assert_eq!(player.sequence(), Some(2));
+    let middle_x = player.frame().unwrap().1.canvas.offset[0];
+    assert_eq!(middle_x, 0.125);
+    assert!(player.switch_pose("edge-right", "peek-right", halfway));
+    player.tick(halfway).unwrap();
+    assert_eq!(player.frame().unwrap().1.canvas.offset[0], middle_x);
+    player.tick(halfway + POSE_SLIDE).unwrap();
+    assert_eq!(player.frame().unwrap().1.canvas.offset[0], 0.25);
+    assert!(receiver.try_recv().is_err());
 }

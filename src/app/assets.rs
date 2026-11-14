@@ -4,14 +4,18 @@ use std::{
     sync::Arc,
 };
 
-use winit::event_loop::EventLoopProxy;
+use winit::{
+    event_loop::EventLoopProxy,
+    platform::windows::WindowExtWindows,
+    window::{Icon, Window},
+};
 
 use crate::{
     media::{
-        LoadedResource, Pack, Variant,
+        LoadedResource, Pack, PackIcon, Variant,
         playback::{PageResult, Playback},
     },
-    platform::windows::local_path,
+    platform::windows::{apply_embedded_window_icons, local_path},
     render::Renderer,
 };
 
@@ -67,12 +71,25 @@ pub(crate) struct LoadedPack {
     pub playback: Playback,
     pub assets: CharacterAssets,
     pub click_wave: Option<Vec<u8>>,
+    pub tray_icon: Option<PackIcon>,
 }
 
 #[derive(Default)]
 pub(crate) struct CharacterAssets {
     pub name: Option<String>,
     pub poster: Option<egui::ColorImage>,
+    pub window_icon: Option<Icon>,
+}
+
+impl CharacterAssets {
+    pub fn apply_window_icon(&self, window: &Window) {
+        if let Some(icon) = &self.window_icon {
+            window.set_window_icon(Some(icon.clone()));
+            window.set_taskbar_icon(Some(icon.clone()));
+        } else {
+            apply_embedded_window_icons(window);
+        }
+    }
 }
 
 impl LoadedPack {
@@ -110,10 +127,26 @@ impl LoadedPack {
             Some(LoadedResource::Audio(wave)) => Some(wave),
             _ => None,
         };
+        let window_icon = match resource("app.icon") {
+            Some(LoadedResource::Icon(icon)) => icon
+                .rgba_for_size(64)
+                .ok()
+                .and_then(|(side, rgba)| Icon::from_rgba(rgba, side, side).ok()),
+            _ => None,
+        };
+        let tray_icon = match resource("tray.icon") {
+            Some(LoadedResource::Icon(icon)) => Some(icon),
+            _ => None,
+        };
         Ok(Self {
             playback,
-            assets: CharacterAssets { name, poster },
+            assets: CharacterAssets {
+                name,
+                poster,
+                window_icon,
+            },
             click_wave,
+            tray_icon,
         })
     }
 

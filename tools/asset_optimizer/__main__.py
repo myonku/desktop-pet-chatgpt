@@ -11,7 +11,7 @@ import tempfile
 
 from PIL import Image
 
-from .frames import clean_alpha, denoise_rgb, rgb_for_upscale
+from .frames import optimize_frame, rgb_for_upscale
 
 
 MODEL = "realesr-animevideov3"
@@ -33,10 +33,11 @@ def rectangle(value):
     raise argparse.ArgumentTypeError("expected x,y,width,height in input pixels")
 
 
-def upscale(frames, exe, models, workspace, tile, gpu_id):
+def upscale(frames, exe, models, workspace, tile, gpu_id, *, resize_back=False):
     exe, models = exe.resolve(strict=True), models.resolve(strict=True)
     model_files = [models / f"{MODEL}-x{SCALE}.{extension}" for extension in ("param", "bin")]
     provenance = {"model": MODEL, "scale": SCALE, "tile": tile, "gpu_id": gpu_id,
+                  "resize_back": resize_back,
                   "executable_sha256": file_hash(exe),
                   "weights": {path.name: file_hash(path) for path in model_files}}
     rgb_input, rgb_output = workspace / "rgb-input", workspace / "rgb-output"
@@ -56,8 +57,12 @@ def upscale(frames, exe, models, workspace, tile, gpu_id):
             expected = (frame.width * SCALE, frame.height * SCALE)
             if result.size != expected:
                 raise ValueError(f"GPU output size mismatch for {path.name}")
-            alpha = frame.getchannel("A").resize(expected, Image.Resampling.BILINEAR)
             rgba = result.convert("RGB")
+            alpha = frame.getchannel("A")
+            if resize_back:
+                rgba = rgba.resize(frame.size, Image.Resampling.LANCZOS)
+            else:
+                alpha = alpha.resize(expected, Image.Resampling.BILINEAR)
             rgba.putalpha(alpha)
         rgba.save(path)
     return provenance
@@ -101,9 +106,8 @@ def optimize(args):
                         raise ValueError("protected rectangle lies outside the input canvas")
                 if frame.size != size:
                     raise ValueError(f"inconsistent frame dimensions: {path.name}")
-                cleaned, removed = (frame.copy(), 0) if args.keep_alpha else clean_alpha(frame, args.protect)
-                if args.denoise:
-                    cleaned = denoise_rgb(cleaned)
+                cleaned, removed = optimize_frame(frame, keep_alpha=args.keep_alpha,
+                                                  protected=args.protect, denoise=args.denoise)
                 name = path.stem + ".png"
                 cleaned.save(frames / name)
             report["frames"].append({"input": path.name, "input_sha256": hashlib.sha256(data).hexdigest(),

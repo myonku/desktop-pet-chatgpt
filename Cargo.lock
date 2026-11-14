@@ -381,6 +381,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "find-msvc-tools",
  "png",
  "pollster",
  "serde",

@@ -1,5 +1,7 @@
+mod icon;
 mod manifest;
 mod pack;
+pub use icon::PackIcon;
 
 #[cfg(all(windows, feature = "ffmpeg-decoder"))]
 mod ffmpeg;

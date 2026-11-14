@@ -76,5 +76,6 @@ pub struct Resource {
 pub enum ResourceContent {
     Image { page: String },
     Audio { file: Payload },
+    Icon { file: Payload },
     Text { file: Payload },
 }

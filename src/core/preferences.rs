@@ -26,7 +26,7 @@ impl Default for Preferences {
     }
 }
 
-pub const INITIAL_SCALE: u16 = 70;
+pub const INITIAL_SCALE: u16 = 100;
 pub const SIZE_RANGE: std::ops::RangeInclusive<u16> = 50..=200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

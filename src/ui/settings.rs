@@ -1,9 +1,18 @@
 use std::{error::Error, time::Instant};
 
-use winit::{dpi::LogicalSize, event::WindowEvent, event_loop::ActiveEventLoop, window::Window};
+use winit::{
+    dpi::LogicalSize,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoopProxy},
+    window::Window,
+};
 
 use super::Panel;
-use crate::core::preferences::{Preferences, SIZE_RANGE};
+use crate::{
+    app::AppEvent,
+    core::preferences::{Preferences, SIZE_RANGE},
+    platform::windows::SettingsModal,
+};
 
 #[derive(Clone, PartialEq)]
 pub struct SettingsDraft {
@@ -24,6 +33,7 @@ pub enum SettingsAction {
 }
 
 pub struct SettingsWindow {
+    _modal: SettingsModal,
     panel: Panel,
     pub draft: SettingsDraft,
     pub notice: Option<String>,
@@ -41,9 +51,12 @@ impl SettingsWindow {
         draft: SettingsDraft,
         development: bool,
         trace_layout: bool,
+        proxy: EventLoopProxy<AppEvent>,
     ) -> Result<Self, Box<dyn Error>> {
+        let panel = Panel::open(event_loop, "桌宠 · 设置", LogicalSize::new(520, 625))?;
         Ok(Self {
-            panel: Panel::open(event_loop, "桌宠 · 设置", LogicalSize::new(520, 625))?,
+            _modal: SettingsModal::install(&panel.window, proxy)?,
+            panel,
             draft,
             development,
             notice: None,
