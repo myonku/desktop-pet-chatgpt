@@ -1,0 +1,355 @@
+use super::*;
+
+#[test]
+fn timeline_skips_late_frames_and_wraps_at_total_duration() {
+    let mut timeline = Timeline {
+        ends: vec![10, 30, 60],
+        looping: true,
+    };
+    assert_eq!(
+        timeline.at(Duration::from_micros(42)),
+        (2, Some(Duration::from_micros(18)))
+    );
+    assert_eq!(
+        timeline.at(Duration::from_micros(60)),
+        (3, Some(Duration::from_micros(10)))
+    );
+    timeline.looping = false;
+    assert_eq!(timeline.at(Duration::from_micros(61)), (2, None));
+}
+
+#[test]
+fn cancelled_generation_rejects_old_completion_and_releases_request_slot() {
+    let (requests, _receiver) = mpsc::sync_channel(1);
+    let mut source = FrameSource {
+        requests: Some(requests),
+        worker: None,
+        generation: Arc::new(AtomicU64::new(0)),
+        id: 42,
+        pending: Some(0),
+    };
+    source.cancel();
+    let result = PageResult {
+        source: 42,
+        generation: 0,
+        index: 0,
+        pixels: Ok(PagePixels {
+            size: [1, 1],
+            rgba: vec![0; 4],
+        }),
+    };
+    assert!(source.accept(result).is_none());
+    assert_eq!(source.pending, None);
+    source.request(0, None).unwrap();
+    assert_eq!(source.pending, Some(1));
+}
+
+#[test]
+fn page_source_rejects_wrong_instance_without_releasing_current_request() {
+    let (requests, _receiver) = mpsc::sync_channel(1);
+    let mut source = FrameSource {
+        requests: Some(requests),
+        worker: None,
+        generation: Arc::new(AtomicU64::new(0)),
+        id: 42,
+        pending: Some(0),
+    };
+    assert!(
+        source
+            .accept(PageResult {
+                source: 41,
+                generation: 0,
+                index: 0,
+                pixels: Err(io::Error::other("old"))
+            })
+            .is_none()
+    );
+    assert_eq!(source.pending, Some(0));
+}
+
+fn test_player() -> (Playback, mpsc::Receiver<Request>) {
+    let (requests, receiver) = mpsc::sync_channel(1);
+    let animation = |id: &str, looping, page| Animation {
+        id: id.into(),
+        preview_name: None,
+        timeline: Timeline {
+            ends: vec![100_000, 200_000],
+            looping,
+        },
+        frames: vec![(page, [0, 0, 1, 1]), (page + 1, [0, 0, 1, 1])],
+        canvas: Canvas::untransformed([1, 1]),
+        movement: Some([10, 20]),
+        directions: [true, false],
+    };
+    let mut player = Playback {
+        source: FrameSource {
+            requests: Some(requests),
+            worker: None,
+            generation: Arc::new(AtomicU64::new(0)),
+            id: 42,
+            pending: None,
+        },
+        actions: vec![
+            animation("move-left", false, 3),
+            animation("interact", false, 2),
+            animation("idle", true, 0),
+        ],
+        bindings: [
+            binding(Behavior::MoveLeft, 0),
+            binding(Behavior::Interact, 1),
+            binding(Behavior::Idle, 2),
+        ]
+        .into(),
+        base: 2,
+        active: 2,
+        once: false,
+        edge_pose: false,
+        epoch: None,
+        waiting: None,
+        displayed: None,
+        ready: None,
+        failed: None,
+        selected: None,
+        present_sequence: None,
+        pose_slide: None,
+        pack_id: "test".into(),
+        announced: false,
+    };
+    assert_eq!(player.movement(0, Side::Left), Some([10, 20]));
+    assert_eq!(player.movement(0, Side::Right), None);
+    assert!(!player.play(Some(Behavior::Land), true));
+    (player, receiver)
+}
+
+fn binding(behavior: Behavior, index: usize) -> (Behavior, crate::media::manifest::ActionGroup) {
+    (
+        behavior,
+        crate::media::manifest::ActionGroup {
+            default: index,
+            variants: [("sample".into(), index)].into(),
+        },
+    )
+}
+
+#[test]
+fn unavailable_named_variant_uses_its_default_and_random_skips_failed_clips() {
+    let (mut player, _) = test_player();
+    player
+        .bindings
+        .get_mut(&Behavior::Interact)
+        .unwrap()
+        .variants
+        .insert("other".into(), 0);
+    assert_eq!(
+        player.select_action(
+            Behavior::Interact,
+            ActionChoice::Variant("other"),
+            |index| index != 0
+        ),
+        Some(1),
+    );
+    assert_eq!(
+        player.select_action(Behavior::Interact, ActionChoice::Random, |index| index != 1),
+        Some(0),
+    );
+    assert_eq!(
+        player.select_action(Behavior::Interact, ActionChoice::Variant("other"), |_| {
+            false
+        }),
+        None,
+    );
+}
+
+#[test]
+fn diagonal_uses_its_binding_then_the_exact_same_side_flight_variant() {
+    let (mut player, _) = test_player();
+    assert!(!player.has_diagonal());
+    assert_eq!(
+        player.select_diagonal(Side::Left, Vertical::Up, |_| true),
+        None
+    );
+    player
+        .bindings
+        .get_mut(&Behavior::MoveLeft)
+        .unwrap()
+        .variants
+        .insert("fly".into(), 1);
+    assert!(player.has_diagonal());
+    assert_eq!(
+        player.select_diagonal(Side::Left, Vertical::Up, |_| true),
+        Some(1)
+    );
+    assert_eq!(
+        player.select_diagonal(Side::Right, Vertical::Up, |_| true),
+        None
+    );
+    player.bindings.extend([binding(Behavior::MoveUpLeft, 0)]);
+    assert_eq!(
+        player.select_diagonal(Side::Left, Vertical::Up, |_| true),
+        Some(0)
+    );
+    assert_eq!(
+        player.select_diagonal(Side::Left, Vertical::Up, |index| index != 0),
+        Some(1)
+    );
+    assert_eq!(
+        player.select_diagonal(Side::Left, Vertical::Down, |index| index != 1),
+        None
+    );
+}
+
+fn ready(request: Request) -> PageResult {
+    PageResult {
+        source: 42,
+        generation: request.generation,
+        index: request.index,
+        pixels: Ok(PagePixels {
+            size: [1, 1],
+            rgba: vec![255; 4],
+        }),
+    }
+}
+
+#[test]
+fn prefetch_starts_at_first_frame_of_a_shared_page() {
+    let (mut player, receiver) = test_player();
+    let idle = &mut player.actions[player.base];
+    idle.frames.insert(1, idle.frames[0]);
+    idle.timeline.ends = vec![100_000, 200_000, 300_000];
+    let now = Instant::now();
+    player.tick(now).unwrap();
+    player.accept(ready(receiver.try_recv().unwrap()));
+    player.tick(now).unwrap();
+    let next = receiver.try_recv().unwrap();
+    assert_eq!(next.index, 1);
+    player.accept(ready(next));
+    assert!(
+        player
+            .tick(now + Duration::from_millis(200))
+            .unwrap()
+            .changed
+    );
+    assert_eq!(receiver.try_recv().unwrap().index, 0);
+}
+
+#[test]
+fn action_switch_holds_frame_discards_stale_page_and_completes_once() {
+    let (mut player, receiver) = test_player();
+    let now = Instant::now();
+    assert_eq!(player.tick(now).unwrap().deadline, Some(now + PAGE_TIMEOUT));
+    player.accept(ready(receiver.try_recv().unwrap()));
+    assert!(player.tick(now).unwrap().changed);
+    let stale = receiver.try_recv().unwrap();
+    assert!(player.play(Some(Behavior::Interact), true));
+    assert!(!player.tick(now).unwrap().changed);
+    assert_eq!(player.frame().unwrap().0.index, 0);
+    player.accept(ready(stale));
+    assert!(!player.tick(now).unwrap().changed);
+    player.accept(ready(receiver.try_recv().unwrap()));
+    assert!(player.tick(now).unwrap().changed);
+    assert_eq!(player.frame().unwrap().0.index, 2);
+    let next = receiver.try_recv().unwrap();
+    let missing_at = now + Duration::from_millis(100);
+    assert_eq!(player.tick(missing_at).unwrap().elapsed, None);
+    assert_eq!(player.frame().unwrap().0.index, 2);
+    player.accept(ready(next));
+    let resume = missing_at + Duration::from_millis(40);
+    assert_eq!(
+        player.tick(resume).unwrap().elapsed,
+        Some(Duration::from_millis(100))
+    );
+    assert!(
+        !player
+            .tick(resume + Duration::from_millis(99))
+            .unwrap()
+            .finished
+    );
+    assert!(
+        player
+            .tick(resume + Duration::from_millis(100))
+            .unwrap()
+            .finished
+    );
+    player.play(None, false);
+    assert_eq!(player.active_id(), "idle");
+}
+
+#[test]
+fn first_page_wait_is_bounded_and_a_retry_keeps_the_prior_frame() {
+    let (mut player, receiver) = test_player();
+    let now = Instant::now();
+    player.tick(now).unwrap();
+    player.accept(ready(receiver.try_recv().unwrap()));
+    player.tick(now).unwrap();
+    assert!(player.play(Some(Behavior::Interact), true));
+    player.tick(now).unwrap();
+    let Err(error) = player.tick(now + PAGE_TIMEOUT) else {
+        panic!("missing page never timed out");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert_eq!(player.frame().unwrap().0.index, 0);
+    player.play(None, false);
+    assert!(player.tick(now + PAGE_TIMEOUT).unwrap().changed);
+}
+
+#[test]
+fn paired_pose_slide_keeps_phase_and_can_reverse_without_a_position_jump() {
+    let (mut player, receiver) = test_player();
+    let mut edge = Animation {
+        id: "edge-right".into(),
+        preview_name: None,
+        timeline: Timeline {
+            ends: vec![100_000, 200_000],
+            looping: true,
+        },
+        frames: vec![(0, [0, 0, 1, 1]), (0, [0, 0, 1, 1])],
+        canvas: Canvas::untransformed([1, 1]),
+        movement: None,
+        directions: [false; 2],
+    };
+    edge.canvas.offset[0] = 0.25;
+    let mut peek = Animation {
+        id: "peek-right".into(),
+        preview_name: None,
+        timeline: Timeline {
+            ends: edge.timeline.ends.clone(),
+            looping: true,
+        },
+        frames: edge.frames.clone(),
+        canvas: edge.canvas,
+        movement: None,
+        directions: [false; 2],
+    };
+    peek.canvas.offset[0] = 0.0;
+    player.actions.extend([edge, peek]);
+    player.bindings.extend([
+        binding(Behavior::DockRight, 3),
+        binding(Behavior::PeekRight, 4),
+    ]);
+    let start = Instant::now();
+    player.play(Some(Behavior::DockRight), false);
+    player.tick(start).unwrap();
+    player.accept(ready(receiver.try_recv().unwrap()));
+    player.tick(start).unwrap();
+    let click = start + Duration::from_millis(130);
+    player.tick(click).unwrap();
+
+    assert!(player.switch_pose(Behavior::PeekRight, Behavior::DockRight, click));
+    assert_eq!(
+        player.tick(click).unwrap().deadline,
+        Some(click + POSE_UPDATE)
+    );
+    assert_eq!(player.sequence(), Some(1));
+    assert_eq!(player.frame().unwrap().1.canvas.offset[0], 0.25);
+    let halfway = click + POSE_SLIDE / 2;
+    assert!(player.tick(halfway).unwrap().changed);
+    assert_eq!(player.sequence(), Some(2));
+    let middle_x = player.frame().unwrap().1.canvas.offset[0];
+    assert_eq!(middle_x, 0.125);
+    assert!(player.switch_pose(Behavior::DockRight, Behavior::PeekRight, halfway));
+    player.tick(halfway).unwrap();
+    assert_eq!(player.frame().unwrap().1.canvas.offset[0], middle_x);
+    player.tick(halfway + POSE_SLIDE).unwrap();
+    assert_eq!(player.frame().unwrap().1.canvas.offset[0], 0.25);
+    assert!(receiver.try_recv().is_err());
+}

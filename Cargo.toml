@@ -1,0 +1,73 @@
+[package]
+name = "desktop-pet-chatgpt"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+default-run = "desktop-pet-chatgpt"
+
+[[bin]]
+name = "check-chatgpt-account"
+path = "src/bin/check-chatgpt-account.rs"
+required-features = ["development"]
+
+[features]
+development = []
+window-diagnostics = []
+
+[dependencies]
+png = "=0.18.1"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml_edit = { version = "=0.25.19", features = ["serde"] }
+
+[target.'cfg(windows)'.build-dependencies]
+find-msvc-tools = "=0.1.15"
+
+[target.'cfg(windows)'.dependencies]
+windows-reactor = "=0.100.0"
+pollster = "=0.4.0"
+winit = { version = "=0.30.12", default-features = false, features = [
+    "rwh_06",
+] }
+wgpu = { version = "=27.0.1", default-features = false, features = [
+    "std",
+    "dx12",
+    "wgsl",
+] }
+windows = { version = "=0.58.0", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Audio",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Packaging_Appx",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Keep page decoding and hash verification fast while debugging application code.
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
